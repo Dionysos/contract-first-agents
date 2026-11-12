@@ -1,0 +1,69 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-retries 10
+    env:
+      CFA_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make vet
+      - run: go test -race ./...   # unitaires, intégration, bout en bout avec l'agent factice
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint OpenAPI
+        run: npx --yes @redocly/cli@1.25.0 lint docs/openapi.yaml
+      - uses: sqlc-dev/setup-sqlc@v4
+        with:
+          sqlc-version: "1.30.0"
+      - name: Code sqlc à jour
+        run: sqlc diff
+
+  compose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Démarrage sans .env (agent factice, dépôt de démo)
+        run: docker compose up -d --build --wait
+      - name: Objectif du planner au merge
+        run: scripts/compose-smoke.sh
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
