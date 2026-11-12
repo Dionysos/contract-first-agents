@@ -1,0 +1,27 @@
+{
+  "name": "cfa-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dashboard de cfa (phase 1, lecture seule) : React, TypeScript, Bootstrap.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "bootstrap": "5.3.8",
+    "react": "19.3.1",
+    "react-bootstrap": "2.10.10",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.6",
+    "vitest": "3.2.7"
+  }
+}
