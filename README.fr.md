@@ -4,7 +4,7 @@
 
 Un développeur dirige une équipe d'agents IA spécialisés (planner, contracts, back, front), à la manière d'un tech lead. Les agents découpent les objectifs et codent chacun dans leur périmètre, coordonnés par un bus maison (`cfa`). L'humain valide le merge.
 
-![Dashboard : objectif en attente de l'approbation du merge](docs/screenshots/dashboard-phase1.png)
+![Dashboard : objectif en attente de l'approbation du merge](docs/screenshots/dashboard-phase1-dark.png)
 
 > **Phase 1 sur 4 (MVP).** Ce dépôt contient la boucle de base : un objectif va du planner jusqu'à `main`, approuvé par l'humain. Les phases suivantes sont décrites dans la [feuille de route](#feuille-de-route) ; les documents de `docs/` décrivent la cible complète.
 

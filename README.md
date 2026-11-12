@@ -4,7 +4,7 @@
 
 A developer leads a team of specialized AI agents (planner, contracts, back, front), the way a tech lead would. The agents break goals down and each one codes within its own scope, coordinated by a home-grown bus (`cfa`). The human approves the merge.
 
-![Dashboard: goal waiting for merge approval](docs/screenshots/dashboard-phase1.png)
+![Dashboard: goal waiting for merge approval](docs/screenshots/dashboard-phase1-dark.png)
 
 > **Phase 1 of 4 (MVP).** This repository contains the core loop: a goal goes from the planner all the way to `main`, approved by the human. The next phases are described in the [roadmap](#roadmap); the documents in `docs/` describe the full target.
 
