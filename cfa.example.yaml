@@ -1,0 +1,22 @@
+# Configuration de cfa (phase 1). Détail : docs/integration.md#configuration.
+# Sous docker compose, ce fichier est la configuration par défaut ; pour la modifier :
+# cp cfa.example.yaml cfa.yaml et CFA_CONFIG_FILE=./cfa.yaml dans .env.
+# target_repo, work_dir et agent_command y sont remplacés par l'environnement
+# (TARGET_REPO, CFA_WORK_DIR, CFA_AGENT_COMMAND ← CFA_AGENT, défaut fake-agent).
+target_repo: /srv/target.git
+base_branch: main
+concurrency: 3                      # runs simultanés
+agent_command: cfa-pi               # pi.dev ; « fake-agent » pour essayer sans LLM (options après cfa-pi transmises à pi)
+work_dir: /srv/work
+run_timeout: 20m                    # au-delà, le run est arrêté et la tâche échoue
+
+roles:
+  # model : identifiant pi « fournisseur/modèle » ; thinking (facultatif) : off … xhigh.
+  # write : périmètre d'écriture ; checks : contrôles lancés par le runner après la tâche.
+  planner:   { model: "anthropic/claude-opus-5-5",   thinking: high, prompt: /srv/roles/planner.md,   write: [] }
+  contracts: { model: "anthropic/claude-sonnet-5-5", prompt: /srv/roles/contracts.md, write: ["contracts/**"],
+               checks: ["make contracts-lint"] }
+  back:      { model: "anthropic/claude-sonnet-5-5", prompt: /srv/roles/back.md,      write: ["api/**", "db/**"],
+               checks: ["make test-api"] }
+  front:     { model: "anthropic/claude-sonnet-5-5", prompt: /srv/roles/front.md,     write: ["web/**"],
+               checks: ["make test-web"] }
