@@ -1,33 +1,35 @@
 # contract-first-agents
 
-Un développeur dirige une équipe d'agents IA spécialisés (planner, contracts, back, front), à la manière d'un tech lead. Les agents découpent les objectifs et codent chacun dans leur périmètre, coordonnés par un bus maison (`cfa`). L'humain valide le merge.
+[🇫🇷 Français](README.fr.md) · 🇬🇧 English
 
-![Dashboard : objectif en attente de l'approbation du merge](docs/screenshots/dashboard-phase1.png)
+A developer leads a team of specialized AI agents (planner, contracts, back, front), the way a tech lead would. The agents break goals down and each one codes within its own scope, coordinated by a home-grown bus (`cfa`). The human approves the merge.
 
-> **Phase 1 sur 4 (MVP).** Ce dépôt contient la boucle de base : un objectif va du planner jusqu'à `main`, approuvé par l'humain. Les phases suivantes sont décrites dans la [feuille de route](#feuille-de-route) ; les documents de `docs/` décrivent la cible complète.
+![Dashboard: goal waiting for merge approval](docs/screenshots/dashboard-phase1.png)
 
-## Fonctionnement
+> **Phase 1 of 4 (MVP).** This repository contains the core loop: a goal goes from the planner all the way to `main`, approved by the human. The next phases are described in the [roadmap](#roadmap); the documents in `docs/` describe the full target.
 
-L'humain soumet un objectif ; le planner le découpe en tâches, le rôle `contracts` définit l'interface, puis back et front codent en parallèle à partir de ce contrat. Le runner vérifie chaque tâche. Rien n'arrive sur `main` sans l'accord de l'humain.
+## How it works
+
+The human submits a goal; the planner breaks it into tasks, the `contracts` role defines the interface, then back and front code in parallel against that contract. The runner checks every task. Nothing reaches `main` without the human's approval.
 
 ```mermaid
 flowchart TD
-    H1(["👤 Humain : nouvel objectif<br/>titre, description"]) --> P["🧭 planner<br/>découpe en tâches avec dépendances"]
-    P --> C["📜 contracts<br/>définit l'interface dans contracts/"]
+    H1(["👤 Human: new goal<br/>title, description"]) --> P["🧭 planner<br/>splits into tasks with dependencies"]
+    P --> C["📜 contracts<br/>defines the interface in contracts/"]
     C --> PAR
 
-    subgraph PAR ["Travail en parallèle, un worktree git par run"]
+    subgraph PAR ["Parallel work, one git worktree per run"]
         direction LR
         B["⚙️ back<br/>api/, db/"]
         F["🖥️ front<br/>web/"]
     end
 
-    PAR --> V{"Runner : contrôles<br/>périmètre du rôle<br/>make test-…"}
-    V -->|"échec"| KO(["❌ objectif en échec"])
-    V -->|"OK"| M["Fusion dans goal/&lt;id&gt;"]
-    M --> AM{"👤 Approbation<br/>du merge"}
-    AM -->|"accepté"| MAIN(["✅ main"])
-    AM -->|"refusé"| KO2(["objectif annulé"])
+    PAR --> V{"Runner: checks<br/>role scope<br/>make contracts-lint<br/>make test-api, make test-web"}
+    V -->|"failure"| KO(["❌ goal failed"])
+    V -->|"OK"| M["Merge into goal/&lt;id&gt;"]
+    M --> AM{"👤 Merge<br/>approval"}
+    AM -->|"accepted"| MAIN(["✅ main"])
+    AM -->|"rejected"| KO2(["goal cancelled"])
 
     classDef human fill:#fde68a,stroke:#b45309,color:#1f2937
     classDef agent fill:#bbf7d0,stroke:#15803d,color:#1f2937
@@ -37,61 +39,61 @@ flowchart TD
     class V,M go
 ```
 
-Garde-fous appliqués par le bus et le runner : token par run, périmètre d'écriture par rôle, `contracts/` en lecture seule hors du rôle `contracts`, durée maximale par run. Une seule tentative par tâche en phase 1 : une tâche en échec fait échouer l'objectif. Aucun agent ne merge.
+Guardrails enforced by the bus and the runner: one token per run, a write scope per role, `contracts/` read-only outside the `contracts` role, and a maximum duration per run. One attempt per task in phase 1: a failed task fails the goal. No agent ever merges.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph USER ["Poste de l'humain"]
+    subgraph USER ["Human's machine"]
         direction TB
-        DASH["Dashboard (lecture seule)<br/>React · TypeScript · Bootstrap<br/>EventSource, useReducer"]
-        CLIH["CLI cfa<br/>Go"]
+        DASH["Dashboard (read-only)<br/>React · TypeScript · Bootstrap<br/>EventSource, useReducer"]
+        CLIH["cfa CLI<br/>Go"]
     end
 
     subgraph COMPOSE ["docker compose"]
         direction LR
         subgraph APIC ["cfa-api · Go"]
             direction TB
-            HTTP["api<br/>net/http, routes REST, SSE"]
-            SVC["service + domain<br/>règles métier, transitions"]
-            AUTH["auth<br/>tokens hachés, sessions"]
-            HUB["events.Hub<br/>LISTEN → abonnés SSE"]
-            STORE["store<br/>pgx + sqlc, migrations goose"]
-            EMB["dashboard embarqué<br/>go:embed"]
+            HTTP["api<br/>net/http, REST routes, SSE"]
+            SVC["service + domain<br/>business rules, transitions"]
+            AUTH["auth<br/>hashed tokens, sessions"]
+            HUB["events.Hub<br/>LISTEN → SSE subscribers"]
+            STORE["store<br/>pgx + sqlc, goose migrations"]
+            EMB["embedded dashboard<br/>go:embed"]
             HTTP --> AUTH
             HTTP --> SVC --> STORE
             HUB --> HTTP
         end
 
-        PG[("PostgreSQL 16<br/>objectifs, tâches, runs<br/>table events + NOTIFY")]
+        PG[("PostgreSQL 16<br/>goals, tasks, runs<br/>events table + NOTIFY")]
 
-        subgraph RUNC ["runner · conteneur"]
+        subgraph RUNC ["runner · container"]
             direction TB
-            RUN["runner · Go<br/>décisions, worktrees git,<br/>contrôles, fusions"]
-            ADAPT["cfa-pi · Go<br/>adaptateur pi.dev"]
-            FAKE["fake-agent · Go<br/>scénario YAML, sans LLM"]
-            PI["pi.dev · Node<br/>agent de code, modèle par rôle"]
-            CLIA["CLI cfa · Go<br/>utilisée par l'agent"]
-            RUN -->|"lance"| ADAPT --> PI
-            RUN -.->|"ou, en test"| FAKE
-            PI -->|"outil bash"| CLIA
+            RUN["runner · Go<br/>decisions, git worktrees,<br/>checks, merges"]
+            ADAPT["cfa-pi · Go<br/>pi.dev adapter"]
+            FAKE["fake-agent · Go<br/>YAML scenario, no LLM"]
+            PI["pi.dev · Node<br/>coding agent, model per role"]
+            CLIA["cfa CLI · Go<br/>used by the agent"]
+            RUN -->|"launches"| ADAPT --> PI
+            RUN -.->|"or, in tests"| FAKE
+            PI -->|"bash tool"| CLIA
         end
 
-        GIT[("Dépôt cible git<br/>goal/&lt;id&gt;, task/…<br/>contracts/ api/ web/")]
+        GIT[("Target git repository<br/>goal/&lt;id&gt;<br/>task/&lt;goal&gt;-&lt;task&gt;-&lt;role&gt;<br/>contracts/ api/ web/")]
     end
 
-    LLM["Fournisseurs LLM<br/>Anthropic, OpenAI…"]
+    LLM["LLM providers<br/>Anthropic, OpenAI, Gemini"]
 
     DASH -->|"SSE GET /events"| HTTP
     CLIH -->|"HTTP + token"| HTTP
     STORE <-->|"SQL"| PG
     PG -->|"NOTIFY cfa_events"| HUB
     RUN <-->|"SSE + REST"| HTTP
-    CLIA -->|"HTTP + token du run"| HTTP
+    CLIA -->|"HTTP + run token"| HTTP
     FAKE -->|"HTTP"| HTTP
     RUN <-->|"worktree, commit, merge"| GIT
-    PI <-->|"lit / écrit le code"| GIT
+    PI <-->|"reads / writes code"| GIT
     PI -->|"HTTPS"| LLM
 
     classDef go fill:#bae6fd,stroke:#0369a1,color:#1f2937
@@ -106,119 +108,119 @@ flowchart LR
     class LLM ext
 ```
 
-| Couleur | Partie | Technologie |
+| Color | Part | Technology |
 | --- | --- | --- |
-| Bleu | Bus, runner, CLI, adaptateur, agent factice | Go (`net/http`, `pgx`, sqlc, goose) |
-| Jaune | Dashboard | React, TypeScript, Bootstrap (Vite), embarqué dans `cfa-api` ; types générés depuis les contrats Go |
-| Vert | Agents | pi.dev (Node), un modèle LLM par rôle |
-| Violet | Données | PostgreSQL 16 (journal `events`), dépôt git cible |
+| Blue | Bus, runner, CLI, adapter, fake agent | Go (`net/http`, `pgx`, sqlc, goose) |
+| Yellow | Dashboard | React, TypeScript, Bootstrap (Vite), embedded in `cfa-api`; types generated from the Go contracts |
+| Green | Agents | pi.dev (Node), one LLM model per role |
+| Purple | Data | PostgreSQL 16 (`events` log), target git repository |
 
-Points clés : le dashboard, la CLI et le runner ne lisent que le **flux d'événements** (SSE avec reprise par `Last-Event-ID`) ; les agents parlent au bus **par la CLI** `cfa`, sans MCP ; pi et l'agent factice passent par la même CLI, donc tout se teste sans LLM. Détail : [docs/architecture.md](docs/architecture.md), [ADR](docs/adr/README.md).
+Key points: the dashboard, the CLI and the runner only read the **event stream** (SSE, resumable with `Last-Event-ID`); agents talk to the bus **through the `cfa` CLI**, without MCP; pi and the fake agent go through the same CLI, so everything can be tested without an LLM. Details: [docs/architecture.md](docs/architecture.md), [ADRs](docs/adr/README.md) (in French).
 
-## Démarrer (Docker seulement)
+## Getting started (Docker only)
 
 ```bash
-docker compose up -d --build --wait            # ou : make up
-docker compose run --rm cli dashboard          # lien de connexion → http://localhost:8080
-docker compose run --rm cli goal new "Pagination de la liste des commandes" \
-  --description "20 par page, tests attendus, pas de breaking change."
-docker compose run --rm cli approvals          # puis : approve <id> ou reject <id> "motif"
+docker compose up -d --build --wait            # or: make up
+docker compose run --rm cli dashboard          # login link → http://localhost:8080
+docker compose run --rm cli goal new "Paginate the orders list" \
+  --description "20 per page, tests expected, no breaking change."
+docker compose run --rm cli approvals          # then: approve <id> or reject <id> "reason"
 ```
 
-Sans `.env`, la pile tourne avec l'**agent factice** (aucune clé API) sur un **dépôt cible de démonstration** créé dans le volume `target` ; les tokens sont créés au démarrage. Pour de vrais agents, copier `.env.example` en `.env` et régler `CFA_AGENT=cfa-pi`, la clé du fournisseur et, au besoin, `TARGET_REPO`. Astuce : `alias cfa='docker compose run --rm cli'`.
+Without a `.env` file, the stack runs with the **fake agent** (no API key) on a **demo target repository** created in the `target` volume; tokens are created at startup. For real agents, copy `.env.example` to `.env` and set `CFA_AGENT=cfa-pi`, the provider's key and, if needed, `TARGET_REPO`. Tip: `alias cfa='docker compose run --rm cli'`.
 
-| Commande | Effet |
+| Command | Effect |
 | --- | --- |
-| `make up` / `make down` / `make logs` | Démarre, arrête, suit les logs |
-| `make smoke` | Bout en bout : un objectif du planner au merge, approbation comprise (jq requis) |
-| `docker compose down -v` | Repart de zéro (base, dépôt de démo, tokens) |
+| `make up` / `make down` / `make logs` | Start, stop, follow the logs |
+| `make smoke` | End to end: one goal from the planner to the merge, approval included (requires jq) |
+| `docker compose down -v` | Start over from scratch (database, demo repository, tokens) |
 
 ## CLI
 
-| Qui | Commandes |
+| Who | Commands |
 | --- | --- |
-| Humain | `goal new` · `goal list` · `goal show` · `goal cancel` · `approvals` · `approve` · `reject` · `watch` · `dashboard` |
+| Human | `goal new` · `goal list` · `goal show` · `goal cancel` · `approvals` · `approve` · `reject` · `watch` · `dashboard` |
 | Agents | `task create` (planner) · `task show` · `task done` · `task fail` |
 
-## Développer cfa
+## Developing cfa
 
-Prérequis : Go 1.26+, et Node 18+ pour le dashboard. Pour travailler sur le code, Docker n'est pas indispensable : un PostgreSQL 16 embarqué est téléchargé au premier lancement (tests, et `cfa-devdb` pour une base locale).
+Requirements: Go 1.26+, and Node 18+ for the dashboard. Docker is not required to work on the code: an embedded PostgreSQL 16 is downloaded on first use (tests, and `cfa-devdb` for a local database).
 
 ```bash
-make test            # tests Go : unitaires, d'intégration et de bout en bout (agent factice)
+make test            # Go tests: unit, integration and end to end (fake agent)
 make vet             # go vet + gofmt
-make generate        # régénère internal/store/db (sqlc)
-make types           # régénère dashboard/src/api/types.ts depuis les contrats Go
-make ui-test         # dashboard : vérification des types + tests (Vitest)
-make ui-dev          # dashboard en rechargement à chaud (Vite, :5173), relayé vers l'API sur :8080
-                     # (CFA_DASHBOARD_ORIGIN=http://localhost:5173 pour que « cfa dashboard » pointe vers Vite)
+make generate        # regenerates internal/store/db (sqlc)
+make types           # regenerates dashboard/src/api/types.ts from the Go contracts
+make ui-test         # dashboard: type checking + tests (Vitest)
+make ui-dev          # dashboard with hot reload (Vite, :5173), proxied to the API on :8080
+                     # (CFA_DASHBOARD_ORIGIN=http://localhost:5173 so that "cfa dashboard" points to Vite)
 
-make build                                                  # construit le dashboard puis les binaires
-bin/cfa-devdb &                                             # PostgreSQL local sur le port 5433
+make build                                                  # builds the dashboard, then the binaries
+bin/cfa-devdb &                                             # local PostgreSQL on port 5433
 export DATABASE_URL="postgres://postgres:postgres@localhost:5433/cfa?sslmode=disable"
-bin/cfa-api &                                               # API + dashboard sur 127.0.0.1:8080
+bin/cfa-api &                                               # API + dashboard on 127.0.0.1:8080
 export CFA_TOKEN=$(bin/cfa-api token create --role human)
-bin/cfa goal new "Pagination de la liste des commandes" --description "20 par page, tests attendus."
-bin/cfa dashboard                                           # ouvre le dashboard avec une session
+bin/cfa goal new "Paginate the orders list" --description "20 per page, tests expected."
+bin/cfa dashboard                                           # opens the dashboard with a session
 ```
 
 ## Documentation
 
-Les documents décrivent la **cible complète** (les quatre phases) ; la [feuille de route](#feuille-de-route) indique ce qui est déjà en place.
+The documents are written in French. They describe the **full target** (all four phases); the [roadmap](#roadmap) shows what is already in place.
 
-| Document | Contenu |
+| Document | Contents |
 | --- | --- |
-| [docs/cfa.md](docs/cfa.md) | Spécification générale : concepts, rôles, bus, runner |
-| [docs/integration.md](docs/integration.md) | Utilisation : cycle de vie d'un objectif, dashboard, configuration, git, CI |
-| [docs/architecture.md](docs/architecture.md) | Architecture logicielle : composants, packages Go, runner, CLI, séquences |
-| [docs/infrastructure.md](docs/infrastructure.md) | Architecture infra : conteneurs, réseaux, isolement des agents, secrets, CI |
-| [docs/api.md](docs/api.md) · [docs/openapi.yaml](docs/openapi.yaml) | Référence de l'API : droits, statuts, garde-fous, événements, SSE |
-| [docs/data-contracts.md](docs/data-contracts.md) | Contrats de données et leur correspondance en Go |
-| [docs/database.md](docs/database.md) | Schéma PostgreSQL |
+| [docs/cfa.md](docs/cfa.md) | General specification: concepts, roles, bus, runner |
+| [docs/integration.md](docs/integration.md) | Usage: goal lifecycle, dashboard, configuration, git, CI |
+| [docs/architecture.md](docs/architecture.md) | Software architecture: components, Go packages, runner, CLI, sequences |
+| [docs/infrastructure.md](docs/infrastructure.md) | Infrastructure: containers, networks, agent isolation, secrets, CI |
+| [docs/api.md](docs/api.md) · [docs/openapi.yaml](docs/openapi.yaml) | API reference: permissions, statuses, guardrails, events, SSE |
+| [docs/data-contracts.md](docs/data-contracts.md) | Data contracts and their Go counterparts |
+| [docs/database.md](docs/database.md) | PostgreSQL schema |
 | [docs/dashboard.md](docs/dashboard.md) | Dashboard |
-| [docs/load-testing.md](docs/load-testing.md) | Méthode de test de montée en charge (prévue) |
-| [docs/adr/](docs/adr/README.md) | Décisions d'architecture (ADR) : une page par choix structurant, avec ses raisons |
+| [docs/load-testing.md](docs/load-testing.md) | Load testing method (planned) |
+| [docs/adr/](docs/adr/README.md) | Architecture decision records (ADRs): one page per structural choice, with its reasons |
 
-## Feuille de route
+## Roadmap
 
-Le projet avance en quatre phases. Chacune ajoute une couche visible sans réécrire la précédente : la table `events` sert de socle dès la phase 1.
+The project moves forward in four phases. Each one adds a visible layer without rewriting the previous one: the `events` table is the foundation from phase 1 onwards.
 
-### Phase 1 : MVP, la boucle qui tourne ✅ (ce dépôt)
+### Phase 1: MVP, the loop that runs ✅ (this repository)
 
-Un objectif va du planner jusqu'à `main`, approuvé par l'humain.
+A goal goes from the planner all the way to `main`, approved by the human.
 
-- API Go : objectifs, tâches, runs, contrôles, approbation du merge, table `events`, flux SSE, token par run.
-- CLI `cfa` pour l'humain et les agents.
-- Runner :
-  - un worktree git par run ;
-  - contrôles de périmètre et `make test-…`, avec `contracts/` en lecture seule ;
-  - fusion dans `goal/<id>`, puis merge dans `main` après approbation.
-- Quatre rôles : planner, contracts, back, front, enchaînés par dépendances.
-- Agent factice et tests de bout en bout sans LLM (parcours complet, et refus d'un fichier hors périmètre) ; `cfa-pi` minimal.
-- Docker compose d'abord : démarrage sans `.env`, dépôt de démo, tokens créés au démarrage.
-- Dashboard en lecture seule sur le flux d'événements (React, TypeScript, Bootstrap), connexion par `cfa dashboard`.
+- Go API: goals, tasks, runs, checks, merge approval, `events` table, SSE stream, one token per run.
+- `cfa` CLI for the human and the agents.
+- Runner:
+  - one git worktree per run;
+  - scope checks and role checks (`make contracts-lint`, `make test-api`, `make test-web`), with `contracts/` read-only;
+  - merge into `goal/<id>`, then into `main` after approval.
+- Four roles: planner, contracts, back, front, chained by dependencies.
+- Fake agent and end-to-end tests without an LLM (full run, and rejection of a file outside the role's scope); minimal `cfa-pi`.
+- Docker compose first: starts without `.env`, demo repository, tokens created at startup.
+- Read-only dashboard on the event stream (React, TypeScript, Bootstrap), login through `cfa dashboard`.
 
-*Reste à faire pour clore la phase :* un run réel avec pi et une clé API, et le job CI `compose` exécuté sous Docker.
+*Left to close the phase:* a real run with pi and an API key.
 
-### Phase 2 : l'équipe qui se coordonne
+### Phase 2: the team that coordinates
 
-- Questions et réponses entre agents par le bus (5 échanges max par fil).
-- Rôle reviewer et demandes de corrections ; 3 tentatives par tâche.
-- Approbation humaine des changements de contrat cassants ; escalades.
-- Suivi des runs : étapes en direct, tokens, coût, plafond de tokens ; budget par objectif.
+- Questions and answers between agents through the bus (5 exchanges max per thread).
+- Reviewer role and change requests; 3 attempts per task.
+- Human approval of breaking contract changes; escalations.
+- Run tracking: live steps, tokens, cost, token cap; budget per goal.
 
-### Phase 3 : le cockpit
+### Phase 3: the cockpit
 
-- Dashboard interactif : formulaire d'objectif, approbations.
-- Export JSON Lines, replay par l'API, page de démo statique.
+- Interactive dashboard: goal form, approvals.
+- JSON Lines export, replay through the API, static demo page.
 
-### Phase 4 : prêt pour la prod
+### Phase 4: production-ready
 
-- OpenTelemetry : traces HTTP, SQL et runs ; métriques métier.
-- Tests de contrat : chaque échange des tests validé contre `docs/openapi.yaml`.
-- Agents dans des conteneurs éphémères avec proxy de sortie.
-- Banc de montée en charge ([méthode](docs/load-testing.md)).
+- OpenTelemetry: HTTP, SQL and run traces; business metrics.
+- Contract tests: every exchange in the tests validated against `docs/openapi.yaml`.
+- Agents in ephemeral containers with an egress proxy.
+- Load testing bench ([method](docs/load-testing.md)).
 
-## Licence
+## License
 
 [MIT](LICENSE)
