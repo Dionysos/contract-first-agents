@@ -1,0 +1,16 @@
+# Garde-fou de périmètre : le front écrit dans api/, sa tâche échoue, puis l'objectif.
+planner:
+  plan:
+    - task: {key: contract, role: contracts, title: "Contrat paginé pour GET /orders", spec: "page, per_page, OrderPage"}
+    - task: {key: ui, role: front, title: "Pagination de la liste", spec: "Composant de pagination", after: [contract]}
+
+contracts:
+  task:
+    - write: {path: contracts/openapi.yaml, content: "openapi: 3.1.0\npaths:\n  /orders: {}\n"}
+    - done: "OrderPage ajouté"
+
+front:
+  task:
+    - write: {path: web/OrderList.tsx, content: "export function OrderList() { return null }\n"}
+    - write: {path: api/hack.go, content: "package api\n"}
+    - done: "Fini (trop vite)"
