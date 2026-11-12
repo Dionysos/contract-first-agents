@@ -1,0 +1,1486 @@
+# Cible complète (quatre phases) : voir l'avertissement dans info.description.
+openapi: 3.1.0
+info:
+  title: cfa API
+  version: 0.1.0
+  summary: Bus de tâches et de messages pour une équipe d'agents IA.
+  description: |
+    **Cible complète.** Cette spécification décrit l'API visée au terme des quatre phases,
+    pas seulement celle de ce dépôt (phase 1) : certaines routes (messages, budget, replay…)
+    ne sont pas encore implémentées. Voir la feuille de route du README.
+
+    API HTTP de `cfa-api` (Go, `net/http` + `pgx`). Référence des routes, des corps et des codes.
+    Les règles qui s'expriment mal en OpenAPI (transitions de statut, garde-fous, catalogue des
+    événements, SSE, replay) sont dans `docs/api.md`, qui fait foi avec ce fichier.
+
+    Conventions : JSON UTF-8, champs en `snake_case`, identifiants entiers, dates RFC 3339 en UTC,
+    montants en dollars (nombres décimaux). Toute écriture produit au moins un événement.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Écoute locale par défaut
+
+security:
+  - bearer: []
+  - session: []
+
+tags:
+  - name: goals
+    description: Objectifs soumis par l'humain
+  - name: tasks
+    description: Tâches créées par le planner et exécutées par les rôles
+  - name: messages
+    description: Messages et fils entre rôles
+  - name: approvals
+    description: Décisions humaines
+  - name: runs
+    description: Exécutions d'agents, déclarées par le runner
+  - name: checks
+    description: Résultats de contrôles (runner, CI)
+  - name: events
+    description: Flux temps réel et export
+  - name: auth
+    description: Session du dashboard
+  - name: system
+    description: Configuration, supervision, dashboard
+
+paths:
+  /goals:
+    post:
+      tags: [goals]
+      operationId: createGoal
+      summary: Soumettre un objectif
+      description: |
+        Appelant : `human`. Crée l'objectif en statut `planning`, sa branche `goal/<id>`, et publie
+        `goal.created`. Le runner lance alors un run `plan`.
+
+        Avec `Idempotency-Key` : une même clé réutilisée dans les 24 heures avec le même corps
+        renvoie `200` et l'objectif déjà créé ; avec un corps différent, `409 idempotency_key_reused`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoalCreate' }
+            example:
+              title: Pagination de la liste des commandes
+              description: La liste doit être paginée (20 par page). Pas de breaking change. Tests attendus.
+              budget_usd: 5
+              base_branch: main
+      responses:
+        '201':
+          description: Objectif créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '200':
+          description: Objectif déjà créé avec cette clé d'idempotence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+    get:
+      tags: [goals]
+      operationId: listGoals
+      summary: Lister les objectifs
+      description: "Appelant : tous. Un agent ne voit que l'objectif de son run. Tri par id décroissant."
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/GoalStatus' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Page d'objectifs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_before]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Goal' }
+                  next_before:
+                    type: [integer, 'null']
+                    description: Valeur à passer à `before` pour la page suivante ; `null` en fin de liste.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /goals/{id}:
+    get:
+      tags: [goals]
+      operationId: getGoal
+      summary: Détail d'un objectif
+      description: "Appelant : tous (un agent, seulement l'objectif de son run)."
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Objectif avec ses tâches, fils, approbations et runs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GoalDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /goals/{id}/cancel:
+    post:
+      tags: [goals]
+      operationId: cancelGoal
+      summary: Annuler un objectif
+      description: |
+        Appelant : `human`. L'objectif passe en `cancelled`, ses tâches non terminées en `failed`
+        (raison `cancelled`), ses approbations en attente en `rejected`. Le runner arrête les runs
+        en cours en réagissant à `goal.status_changed`. Idempotent sur un objectif déjà annulé.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Objectif annulé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /goals/{id}/status:
+    post:
+      tags: [goals]
+      operationId: setGoalStatus
+      summary: Changer le statut d'un objectif (runner)
+      description: |
+        Appelant : `runner`. Transitions autorisées : `planning → running`, `running → planning`
+        (replanification) et tout statut non terminal `→ failed`. Les autres transitions sont
+        automatiques (voir `docs/api.md`).
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [planning, running, failed]
+                reason: { type: string, maxLength: 2000 }
+      responses:
+        '200':
+          description: Statut changé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /goals/{id}/merged:
+    post:
+      tags: [goals]
+      operationId: markGoalMerged
+      summary: Enregistrer le merge (runner)
+      description: |
+        Appelant : `runner`, après une approbation `merge` acceptée. L'objectif passe en `done` et
+        `merge.done` est publié. Refusé (`409 invalid_transition`) sans approbation `merge` acceptée.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [local, pr]
+                  description: '`local` : merge dans la branche de base ; `pr` : branche poussée et PR ouverte.'
+                commit:
+                  type: string
+                  description: SHA du commit de merge (mode `local`).
+                pr_url:
+                  type: string
+                  format: uri
+                  description: URL de la PR (mode `pr`).
+      responses:
+        '200':
+          description: Objectif terminé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /tasks:
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Créer une tâche
+      description: |
+        Appelant : `planner` (token d'un run `plan`) ou `human`. Pour le planner, `goal_id` est déduit
+        du run et doit correspondre s'il est fourni. L'objectif doit être en `planning` ou `running`.
+        Les dépendances doivent appartenir au même objectif et exister déjà (pas de cycle possible).
+        La tâche est créée en `todo` avec sa branche `task/<g>-<id>-<role>`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+      responses:
+        '201':
+          description: Tâche créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /tasks/{id}:
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Détail d'une tâche
+      description: |
+        Appelant : tous (un agent, seulement les tâches de son objectif). Utilisé par `cfa task show` :
+        spec, remarques de relecture, message attendu, run en cours.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Tâche
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tasks/{id}/status:
+    post:
+      tags: [tasks]
+      operationId: setTaskStatus
+      summary: Changer le statut d'une tâche
+      description: |
+        Appelant : l'agent du run `task` en cours sur cette tâche, ou `runner`. Seules les transitions
+        du tableau de `docs/api.md` sont acceptées, sinon `409 invalid_transition`.
+
+        - `blocked` exige `wait_for` : un message envoyé par ce rôle dans cet objectif, sans réponse.
+        - `review` exige `summary` (`cfa task done`).
+        - `failed` et `changes_requested` exigent `reason`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskStatusChange' }
+            examples:
+              block:
+                value: { status: blocked, wait_for: 88 }
+              done:
+                value: { status: review, summary: "Endpoint paginé, tests ajoutés" }
+      responses:
+        '200':
+          description: Statut changé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /tasks/{id}/review:
+    post:
+      tags: [tasks]
+      operationId: reviewTask
+      summary: Relire une tâche
+      description: |
+        Appelant : `reviewer` (token d'un run `review` sur cette tâche). La tâche doit être en `review`.
+        `approve` la passe en `done`, `changes` en `changes_requested`. Publie `task.reviewed` puis
+        `task.status_changed`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [verdict]
+              properties:
+                verdict:
+                  type: string
+                  enum: [approve, changes]
+                comment:
+                  type: string
+                  maxLength: 10000
+                  description: Obligatoire si `verdict` vaut `changes`.
+      responses:
+        '200':
+          description: Relecture enregistrée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /messages:
+    post:
+      tags: [messages]
+      operationId: sendMessage
+      summary: Envoyer un message
+      description: |
+        Appelant : agents, `ci`, `human`. L'émetteur est déduit du token.
+
+        Trois façons de désigner le fil :
+        - `reply_to` : réponse à un message ; le fil et le destinataire (`to`) en sont déduits.
+        - `thread_id` : message dans un fil existant.
+        - `subject` : ouvre un nouveau fil (avec `task_id` optionnel).
+
+        Contrôles (détail dans `docs/api.md`) : règles par type, `hop` du fil au plus 5, quota de
+        messages par rôle et par objectif, objectif non terminé. Un refus publie `message.rejected` ;
+        un refus pour `hop` ou quota crée aussi une approbation `escalation` (une seule par fil).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageCreate' }
+            examples:
+              question:
+                value:
+                  to: back
+                  type: question
+                  subject: Nullabilité de status
+                  body: { text: 'Le champ status peut-il être null ?' }
+              reply:
+                value:
+                  type: answer
+                  reply_to: 88
+                  body: { text: "Non, valeur par défaut 'draft'." }
+      responses:
+        '201':
+          description: Message accepté
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /inbox:
+    get:
+      tags: [messages]
+      operationId: getInbox
+      summary: Messages reçus par le rôle appelant
+      description: |
+        Appelant : agents. Messages dont `to_role` est le rôle du token, limités à l'objectif du run,
+        triés par id croissant.
+      parameters:
+        - name: unread
+          in: query
+          schema: { type: boolean, default: false }
+          description: '`true` : seulement les messages non lus.'
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /messages/{id}/ack:
+    post:
+      tags: [messages]
+      operationId: ackMessage
+      summary: Marquer un message comme lu
+      description: "Appelant : le rôle destinataire. Idempotent ; `read_at` garde la première date."
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Message marqué comme lu
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /threads/{id}:
+    get:
+      tags: [messages]
+      operationId: getThread
+      summary: Historique d'un fil
+      description: "Appelant : tous (un agent, seulement les fils de son objectif)."
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Fil et ses messages par ordre chronologique
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ThreadDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /approvals:
+    get:
+      tags: [approvals]
+      operationId: listApprovals
+      summary: Lister les approbations
+      description: "Appelant : `human`. Tri par id croissant (les plus anciennes d'abord)."
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ApprovalStatus' }
+        - name: goal
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Approbations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [approvals]
+      operationId: createApproval
+      summary: Demander une approbation (runner)
+      description: |
+        Appelant : `runner`. Pour `contract_change` (changement cassant détecté par les contrôles),
+        `merge` (objectif prêt) et `escalation` (conflit de fusion, échec répété d'un run).
+        Les approbations `budget` et les escalades dues aux limites sont créées par l'API elle-même.
+        Une approbation `merge` passe l'objectif en `awaiting_approval`. Refus `409 duplicate_approval`
+        s'il existe déjà une approbation en attente de même type pour la même tâche (ou le même objectif).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalCreate' }
+      responses:
+        '201':
+          description: Approbation créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /approvals/{id}/decision:
+    post:
+      tags: [approvals]
+      operationId: decideApproval
+      summary: Approuver ou refuser
+      description: |
+        Appelant : `human`. L'approbation doit être `pending` (sinon `409 already_decided`).
+        Les effets côté API dépendent du type (voir `docs/api.md`) ; le runner réagit à
+        `approval.resolved` pour le reste.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecision' }
+      responses:
+        '200':
+          description: Décision enregistrée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /runs:
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Déclarer un run (runner)
+      description: |
+        Appelant : `runner`. Enregistre le run, publie `run.started` et renvoie un token d'agent lié
+        au run et au rôle, valable jusqu'à la fin du run (ou `per_run_timeout` + 5 minutes).
+
+        Préconditions par `kind` :
+        - `plan` : objectif en `planning`, rôle `planner`.
+        - `task` : tâche en `todo`, `changes_requested` ou `blocked`, rôle de la tâche. Passe la tâche
+          en `running` ; incrémente `attempts` sauf depuis `blocked`. Au-delà de `max_attempts` :
+          `409 attempts_exhausted` et escalade.
+        - `answer` : le rôle a des messages non lus dans l'objectif.
+        - `review` : tâche en `review`, rôle `reviewer`.
+
+        Pour tous : objectif non terminal, pas d'approbation `budget` en attente
+        (`409 budget_exceeded`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunCreate' }
+      responses:
+        '201':
+          description: Run déclaré
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, token, expires_at]
+                properties:
+                  run: { $ref: '#/components/schemas/Run' }
+                  token:
+                    type: string
+                    description: Token d'agent en clair ; renvoyé une seule fois, stocké haché.
+                  expires_at: { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /runs/{id}/progress:
+    post:
+      tags: [runs]
+      operationId: reportRunProgress
+      summary: Signaler une étape d'un run (runner)
+      description: |
+        Appelant : `runner`. Publie `run.progress` (outil utilisé, fichier modifié, note). Rien
+        d'autre n'est stocké. Run en `running` uniquement.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunProgress' }
+      responses:
+        '202':
+          description: Étape publiée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventRef' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /runs/{id}/finish:
+    post:
+      tags: [runs]
+      operationId: finishRun
+      summary: Enregistrer la fin d'un run (runner)
+      description: |
+        Appelant : `runner`. Enregistre le résultat et la consommation, révoque le token d'agent,
+        ajoute `cost_usd` à `spent_usd` de l'objectif et publie `run.finished`. À 80 % du budget :
+        `budget.warning` ; à 100 % : `budget.exceeded` et approbation `budget`.
+        Ne change pas le statut de la tâche : c'est au runner de le faire ensuite.
+        Run en `running` uniquement (sinon `409 invalid_transition`).
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunFinish' }
+      responses:
+        '200':
+          description: Run terminé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /checks:
+    post:
+      tags: [checks]
+      operationId: reportCheck
+      summary: Publier le résultat d'un contrôle
+      description: |
+        Appelant : `runner`, `ci`. Publie `check.finished`. Les contrôles ne sont pas stockés hors
+        du journal d'événements.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckReport' }
+      responses:
+        '202':
+          description: Résultat publié
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventRef' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+
+  /events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: Flux d'événements (SSE)
+      description: |
+        Appelant : tous (un agent, seulement son objectif). Connexion `text/event-stream` ouverte.
+        Chaque événement est envoyé avec `id:` (id de l'événement), `event:` (type) et `data:`
+        (l'objet `Event` complet sur une ligne). Point de départ : `Last-Event-ID` s'il est présent,
+        sinon `since`, sinon seulement les nouveaux événements. Un commentaire `: ping` est envoyé
+        toutes les 15 secondes. Détail dans `docs/api.md`.
+      parameters:
+        - name: goal
+          in: query
+          schema: { type: integer }
+          description: Ne recevoir que les événements de cet objectif.
+        - name: since
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: Renvoyer d'abord les événements d'id strictement supérieur ; `0` rejoue tout.
+        - name: Last-Event-ID
+          in: header
+          schema: { type: string }
+          description: Envoyé par le navigateur à la reconnexion ; prioritaire sur `since`.
+      responses:
+        '200':
+          description: Flux SSE
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Le champ `data` de chaque événement SSE est un objet `Event` sérialisé (voir `x-data-schema`).
+              x-data-schema:
+                $ref: '#/components/schemas/Event'
+              example: |
+                id: 1284
+                event: message.sent
+                data: {"id":1284,"goal_id":7,"type":"message.sent","actor":"front","created_at":"2026-11-06T14:02:11Z","payload":{...}}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /events/export:
+    get:
+      tags: [events]
+      operationId: exportEvents
+      summary: Exporter les événements d'un objectif (JSON Lines)
+      description: |
+        Appelant : `human`. Première ligne : en-tête `ExportHeader` ; puis un objet `Event` par
+        ligne, par id croissant. Les diffs des `run.finished` sont inclus (déjà tronqués à
+        l'enregistrement).
+      parameters:
+        - name: goal
+          in: query
+          schema: { type: integer }
+          description: Objectif à exporter ; sans ce paramètre, tous les événements de l'instance.
+      responses:
+        '200':
+          description: Fichier JSON Lines
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              description: attachment; filename="goal-<id>.jsonl" (ou "cfa-events.jsonl")
+          content:
+            application/x-ndjson:
+              schema:
+                description: Chaque ligne est un objet JSON ; la première est un `ExportHeader`, les suivantes des `Event`.
+                oneOf:
+                  - $ref: '#/components/schemas/ExportHeader'
+                  - $ref: '#/components/schemas/Event'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /config/public:
+    get:
+      tags: [system]
+      operationId: getPublicConfig
+      summary: Défauts et limites pour le formulaire d'objectif
+      description: "Appelant : `human`. Disponible aussi en mode replay."
+      responses:
+        '200':
+          description: Configuration publique
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PublicConfig' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/code:
+    post:
+      tags: [auth]
+      operationId: createLoginCode
+      summary: Créer un code de connexion au dashboard
+      description: |
+        Appelant : `human`, par token uniquement (pas par cookie). Code à usage unique valable
+        2 minutes, utilisé par `cfa dashboard`.
+      security:
+        - bearer: []
+      responses:
+        '201':
+          description: Code créé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, expires_at, login_url]
+                properties:
+                  code: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  login_url:
+                    type: string
+                    format: uri
+                    example: http://localhost:8080/login?code=Zk3...
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /login:
+    get:
+      tags: [auth]
+      operationId: login
+      summary: Échanger un code contre une session
+      description: |
+        Sans authentification. Code valide : cookie `cfa_session` (`HttpOnly`, `SameSite=Strict`,
+        12 heures) et redirection vers `/`. Code invalide, expiré ou déjà utilisé : `401` avec une
+        page texte invitant à relancer `cfa dashboard`.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '303':
+          description: Session créée, redirection vers le dashboard
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+            Location:
+              schema: { type: string, const: / }
+        '401':
+          description: Code invalide ou expiré
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /healthz:
+    get:
+      tags: [system]
+      operationId: healthz
+      summary: Supervision
+      security: []
+      responses:
+        '200':
+          description: API et base disponibles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Base indisponible
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /:
+    get:
+      tags: [system]
+      operationId: dashboard
+      summary: Dashboard
+      description: Page statique embarquée. Sans session, elle invite à lancer `cfa dashboard`.
+      security: []
+      responses:
+        '200':
+          description: Page HTML
+          content:
+            text/html:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: |
+        Token `human`, `runner`, `ci` ou token d'agent émis par `POST /runs`. Le rôle appelant
+        (et, pour un agent, son run et son objectif) est déduit du token.
+    session:
+      type: apiKey
+      in: cookie
+      name: cfa_session
+      description: |
+        Session du dashboard (rôle `human`). Les requêtes d'écriture doivent porter un en-tête
+        `Origin` égal à l'adresse du dashboard, sinon `403 origin_mismatch`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Before:
+      name: before
+      in: query
+      schema: { type: integer }
+      description: Ne renvoyer que les éléments d'id strictement inférieur.
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, minLength: 8, maxLength: 128 }
+
+  responses:
+    Unauthorized:
+      description: Token ou session absent, invalide ou expiré (`unauthorized`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle non autorisé, ressource hors périmètre du run, `Origin` invalide ou mode replay
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource inexistante ou invisible pour l'appelant (`not_found`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Règle métier refusée (transition, limite, budget, doublon)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: hop_limit_reached
+            message: Le fil 31 a atteint 5 échanges ; une escalade a été créée.
+            approval_id: 12
+    PayloadTooLarge:
+      description: Corps de plus de 1 Mio (`payload_too_large`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: 'Corps envoyé sans `Content-Type: application/json` (`unsupported_media_type`)'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationFailed:
+      description: Corps invalide ; erreurs par champ (`validation_failed`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: validation_failed
+            message: Requête invalide
+            errors:
+              title: 5 caractères minimum
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Code stable, à utiliser par les clients (liste dans `docs/api.md`).
+          enum:
+            - unauthorized
+            - forbidden
+            - origin_mismatch
+            - replay_mode
+            - not_found
+            - validation_failed
+            - unsupported_media_type
+            - payload_too_large
+            - invalid_transition
+            - idempotency_key_reused
+            - hop_limit_reached
+            - message_quota_exceeded
+            - attempts_exhausted
+            - budget_exceeded
+            - duplicate_approval
+            - already_decided
+            - goal_closed
+            - internal
+        message:
+          type: string
+          description: Message lisible, en français.
+        errors:
+          type: object
+          additionalProperties: { type: string }
+          description: Erreurs par champ (seulement avec `validation_failed`).
+        approval_id:
+          type: integer
+          description: Escalade créée à cette occasion (`hop_limit_reached`, `message_quota_exceeded`, `attempts_exhausted`).
+
+    Role:
+      type: string
+      description: |
+        Nom d'un rôle d'agent déclaré dans `cfa.yaml` (par défaut `planner`, `contracts`, `back`,
+        `front`, `reviewer`) ou participant non agent (`human`, `runner`, `ci`).
+      pattern: '^[a-z][a-z0-9_-]{1,31}$'
+      examples: [back]
+
+    GoalStatus:
+      type: string
+      enum: [planning, running, awaiting_approval, done, failed, cancelled]
+
+    GoalCreate:
+      type: object
+      required: [title, description]
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 5, maxLength: 120 }
+        description:
+          type: string
+          minLength: 20
+          maxLength: 5000
+          description: Markdown accepté.
+        budget_usd:
+          type: number
+          minimum: 0.5
+          description: Au plus `budget.max_goal_usd` ; défaut `budget.per_goal_usd`.
+        base_branch:
+          type: string
+          description: Branche existante du dépôt cible ; défaut `base_branch` de la configuration.
+
+    Goal:
+      type: object
+      required: [id, title, description, status, budget_usd, spent_usd, base_branch, branch, created_at, finished_at]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/GoalStatus' }
+        budget_usd: { type: number }
+        spent_usd: { type: number }
+        base_branch: { type: string }
+        branch: { type: string, examples: [goal/7] }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+    GoalDetail:
+      allOf:
+        - $ref: '#/components/schemas/Goal'
+        - type: object
+          required: [tasks, threads, approvals, runs]
+          properties:
+            tasks:
+              type: array
+              items: { $ref: '#/components/schemas/Task' }
+            threads:
+              type: array
+              items: { $ref: '#/components/schemas/Thread' }
+            approvals:
+              type: array
+              items: { $ref: '#/components/schemas/Approval' }
+            runs:
+              type: array
+              items: { $ref: '#/components/schemas/Run' }
+
+    TaskStatus:
+      type: string
+      enum: [todo, running, blocked, review, changes_requested, done, failed]
+
+    TaskCreate:
+      type: object
+      required: [role, title, spec]
+      additionalProperties: false
+      properties:
+        goal_id:
+          type: integer
+          description: Obligatoire pour `human` ; déduit du run pour le planner.
+        role:
+          $ref: '#/components/schemas/Role'
+          description: Rôle d'agent déclaré, autre que `planner`.
+        title: { type: string, minLength: 5, maxLength: 120 }
+        spec:
+          type: string
+          minLength: 1
+          maxLength: 20000
+          description: Markdown.
+        depends_on:
+          type: array
+          items: { type: integer }
+          uniqueItems: true
+          default: []
+
+    Task:
+      type: object
+      required: [id, goal_id, role, title, spec, status, branch, attempts, depends_on, wait_for, summary, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        role: { $ref: '#/components/schemas/Role' }
+        title: { type: string }
+        spec: { type: string }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        branch: { type: string, examples: [task/7-42-back] }
+        attempts: { type: integer, minimum: 0 }
+        depends_on:
+          type: array
+          items: { type: integer }
+        wait_for:
+          type: [integer, 'null']
+          description: Message dont la tâche attend la réponse (statut `blocked`).
+        summary:
+          type: [string, 'null']
+          description: Résumé donné par l'agent au passage en `review`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/Task'
+        - type: object
+          required: [reviews, current_run]
+          properties:
+            reviews:
+              type: array
+              description: Relectures, de la plus ancienne à la plus récente.
+              items: { $ref: '#/components/schemas/Review' }
+            current_run:
+              oneOf:
+                - $ref: '#/components/schemas/Run'
+                - type: 'null'
+
+    Review:
+      type: object
+      required: [verdict, comment, attempt, created_at]
+      properties:
+        verdict: { type: string, enum: [approve, changes] }
+        comment: { type: [string, 'null'] }
+        attempt: { type: integer, description: Tentative relue. }
+        created_at: { type: string, format: date-time }
+
+    TaskStatusChange:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [blocked, review, changes_requested, failed]
+          description: Le passage en `running` se fait par `POST /runs`, en `done` par `POST /tasks/{id}/review`.
+        wait_for: { type: integer, description: Obligatoire avec `blocked`. }
+        summary: { type: string, minLength: 1, maxLength: 2000, description: Obligatoire avec `review`. }
+        reason: { type: string, minLength: 1, maxLength: 10000, description: Obligatoire avec `failed` et `changes_requested`. }
+
+    MessageType:
+      type: string
+      enum: [question, answer, contract_change, notify, escalate]
+
+    MessageBody:
+      type: object
+      required: [text]
+      description: Objet libre ; `text` est le contenu affiché.
+      properties:
+        text: { type: string, minLength: 1, maxLength: 20000 }
+      additionalProperties: true
+
+    MessageCreate:
+      type: object
+      required: [type, body]
+      additionalProperties: false
+      properties:
+        type: { $ref: '#/components/schemas/MessageType' }
+        to:
+          $ref: '#/components/schemas/Role'
+          description: Obligatoire sauf avec `reply_to`. `escalate` va toujours à `human`.
+        body: { $ref: '#/components/schemas/MessageBody' }
+        reply_to: { type: integer, description: Message auquel on répond. }
+        thread_id: { type: integer }
+        subject:
+          type: string
+          minLength: 3
+          maxLength: 200
+          description: Ouvre un nouveau fil. Exclusif avec `thread_id` et `reply_to`.
+        task_id: { type: integer, description: Tâche rattachée au nouveau fil. }
+        goal_id:
+          type: integer
+          description: Obligatoire pour `human` et `ci` à l'ouverture d'un fil ; déduit du run pour un agent.
+
+    Message:
+      type: object
+      required: [id, thread_id, goal_id, from_role, to_role, type, body, reply_to, created_at, read_at]
+      properties:
+        id: { type: integer }
+        thread_id: { type: integer }
+        goal_id: { type: integer }
+        from_role: { $ref: '#/components/schemas/Role' }
+        to_role: { $ref: '#/components/schemas/Role' }
+        type: { $ref: '#/components/schemas/MessageType' }
+        body: { $ref: '#/components/schemas/MessageBody' }
+        reply_to: { type: [integer, 'null'] }
+        created_at: { type: string, format: date-time }
+        read_at: { type: [string, 'null'], format: date-time }
+
+    Thread:
+      type: object
+      required: [id, goal_id, task_id, subject, hop, status, created_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        task_id: { type: [integer, 'null'] }
+        subject: { type: string }
+        hop: { type: integer, minimum: 0, maximum: 5 }
+        status: { type: string, enum: [open, closed, escalated] }
+        created_at: { type: string, format: date-time }
+
+    ThreadDetail:
+      allOf:
+        - $ref: '#/components/schemas/Thread'
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items: { $ref: '#/components/schemas/Message' }
+
+    ApprovalKind:
+      type: string
+      enum: [contract_change, merge, escalation, budget]
+
+    ApprovalStatus:
+      type: string
+      enum: [pending, approved, rejected]
+
+    ApprovalCreate:
+      type: object
+      required: [goal_id, kind, payload]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        task_id: { type: integer }
+        kind:
+          type: string
+          enum: [contract_change, merge, escalation]
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/ContractChangePayload'
+            - $ref: '#/components/schemas/MergePayload'
+            - $ref: '#/components/schemas/EscalationPayload'
+
+    Approval:
+      type: object
+      required: [id, goal_id, task_id, kind, payload, status, comment, created_at, decided_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        task_id: { type: [integer, 'null'] }
+        kind: { $ref: '#/components/schemas/ApprovalKind' }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/ContractChangePayload'
+            - $ref: '#/components/schemas/MergePayload'
+            - $ref: '#/components/schemas/EscalationPayload'
+            - $ref: '#/components/schemas/BudgetPayload'
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        comment: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: [string, 'null'], format: date-time }
+
+    ContractChangePayload:
+      type: object
+      required: [summary, diff, breaking]
+      properties:
+        thread_id: { type: integer, description: Fil du `contract_change` d'origine. }
+        message_id: { type: integer }
+        summary: { type: string }
+        diff: { type: string, description: "Diff de `contracts/`, tronqué si besoin." }
+        breaking:
+          type: array
+          items: { type: string }
+          description: Changements cassants détectés (sortie de `contracts-diff`).
+
+    MergePayload:
+      type: object
+      required: [branch, base_branch, diffstat, checks]
+      properties:
+        branch: { type: string }
+        base_branch: { type: string }
+        diffstat: { $ref: '#/components/schemas/Diffstat' }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, status]
+            properties:
+              name: { type: string }
+              status: { $ref: '#/components/schemas/CheckStatus' }
+
+    EscalationPayload:
+      type: object
+      required: [reason, text]
+      properties:
+        reason:
+          type: string
+          enum: [hop_limit, message_quota, attempts_exhausted, agent, merge_conflict, run_failed]
+        text: { type: string }
+        thread_id: { type: integer }
+        message_id: { type: integer }
+        from_role: { $ref: '#/components/schemas/Role' }
+
+    BudgetPayload:
+      type: object
+      required: [budget_usd, spent_usd]
+      properties:
+        budget_usd: { type: number }
+        spent_usd: { type: number }
+
+    ApprovalDecision:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        comment:
+          type: string
+          maxLength: 10000
+          description: Obligatoire pour `reject`, et pour `approve` d'une escalade (c'est la consigne transmise aux agents).
+        budget_usd:
+          type: number
+          description: Obligatoire pour `approve` d'une approbation `budget` ; nouveau budget, supérieur à `spent_usd`, au plus `budget.max_goal_usd`.
+
+    RunKind:
+      type: string
+      enum: [task, answer, review, plan]
+
+    RunStatus:
+      type: string
+      enum: [running, succeeded, failed, killed]
+
+    RunCreate:
+      type: object
+      required: [goal_id, kind, role, model]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        task_id: { type: integer, description: Obligatoire pour `task` et `review`. }
+        kind: { $ref: '#/components/schemas/RunKind' }
+        role: { $ref: '#/components/schemas/Role' }
+        model: { type: string, examples: ['<fournisseur>/<modèle>'] }
+
+    Run:
+      type: object
+      required: [id, goal_id, task_id, kind, role, model, status, tokens_in, tokens_out, cost_usd, started_at, finished_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        task_id: { type: [integer, 'null'] }
+        kind: { $ref: '#/components/schemas/RunKind' }
+        role: { $ref: '#/components/schemas/Role' }
+        model: { type: string }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        tokens_in: { type: integer }
+        tokens_out: { type: integer }
+        cost_usd: { type: number }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+    RunProgress:
+      type: object
+      required: [step, text]
+      additionalProperties: false
+      properties:
+        step: { type: string, enum: [tool, file, note] }
+        text: { type: string, maxLength: 2000 }
+        path: { type: string, description: Fichier concerné (`file`). }
+
+    RunFinish:
+      type: object
+      required: [status, tokens_in, tokens_out, cost_usd]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, killed]
+        tokens_in: { type: integer, minimum: 0 }
+        tokens_out: { type: integer, minimum: 0 }
+        cost_usd: { type: number, minimum: 0 }
+        error: { type: string, maxLength: 10000, description: Cause de l'échec ou de l'arrêt. }
+        diffstat: { $ref: '#/components/schemas/Diffstat' }
+        files:
+          type: array
+          items: { type: string }
+          description: Fichiers modifiés (`git diff --name-only`).
+        diff:
+          type: string
+          maxLength: 262144
+          description: Diff du run, tronqué par le runner à 256 Kio.
+        diff_truncated: { type: boolean, default: false }
+
+    Diffstat:
+      type: object
+      required: [files, insertions, deletions]
+      properties:
+        files: { type: integer }
+        insertions: { type: integer }
+        deletions: { type: integer }
+
+    CheckStatus:
+      type: string
+      enum: [passed, failed, error]
+
+    CheckReport:
+      type: object
+      required: [goal_id, name, status]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        task_id: { type: integer }
+        run_id: { type: integer }
+        name: { type: string, examples: [contracts-lint] }
+        command: { type: string, examples: [make contracts-lint] }
+        status: { $ref: '#/components/schemas/CheckStatus' }
+        duration_ms: { type: integer, minimum: 0 }
+        output:
+          type: string
+          maxLength: 65536
+          description: Fin de la sortie, tronquée à 64 Kio.
+
+    Event:
+      type: object
+      required: [id, goal_id, type, actor, created_at, payload]
+      properties:
+        id: { type: integer }
+        goal_id: { type: [integer, 'null'] }
+        type:
+          type: string
+          enum:
+            - goal.created
+            - goal.status_changed
+            - task.created
+            - task.status_changed
+            - task.reviewed
+            - run.started
+            - run.progress
+            - run.finished
+            - message.sent
+            - message.rejected
+            - approval.requested
+            - approval.resolved
+            - check.finished
+            - budget.warning
+            - budget.exceeded
+            - merge.done
+        actor:
+          type: string
+          description: Rôle à l'origine de l'événement, ou `system` pour l'API elle-même.
+        created_at: { type: string, format: date-time }
+        payload:
+          type: object
+          description: Contenu propre au type (catalogue dans `docs/api.md`) ; suffit à l'affichage.
+
+    EventRef:
+      type: object
+      required: [event_id]
+      properties:
+        event_id: { type: integer }
+
+    ExportHeader:
+      type: object
+      required: [format, goal_id, exported_at, events]
+      properties:
+        format: { type: string, const: cfa-events/1 }
+        goal_id:
+          type: [integer, 'null']
+          description: Objectif exporté ; `null` pour un export de toute l'instance (démo, archive).
+        title: { type: [string, 'null'], description: Titre libre (démos). }
+        exported_at: { type: string, format: date-time }
+        events: { type: integer, description: Nombre de lignes d'événements qui suivent. }
+
+    PublicConfig:
+      type: object
+      required: [budget, base_branch, branches, roles, replay]
+      properties:
+        budget:
+          type: object
+          required: [per_goal_usd, max_goal_usd, min_goal_usd]
+          properties:
+            per_goal_usd: { type: number }
+            max_goal_usd: { type: number }
+            min_goal_usd: { type: number, const: 0.5 }
+        base_branch: { type: string }
+        branches:
+          type: array
+          items: { type: string }
+          description: Branches du dépôt cible.
+        roles:
+          type: array
+          items:
+            type: object
+            required: [name, model]
+            properties:
+              name: { $ref: '#/components/schemas/Role' }
+              model: { type: string }
+        replay: { type: boolean, description: '`true` si l''API tourne en mode replay.' }
+
+    Health:
+      type: object
+      required: [status, db]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        db: { type: string, enum: [ok, down, replay] }
