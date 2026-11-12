@@ -1,0 +1,6 @@
+node_modules/
+# Build de Vite, embarqué par cfa-api (go:embed). Seul .gitkeep est versionné,
+# pour que le package Go compile sans build du dashboard.
+dist/*
+!dist/.gitkeep
+tsconfig.tsbuildinfo
