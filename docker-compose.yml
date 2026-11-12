@@ -1,0 +1,94 @@
+# cfa : postgres + API + runner. Détail dans docs/infrastructure.md, décision dans docs/adr/0015.
+#
+#   docker compose up -d --build --wait     # dashboard : http://localhost:8080
+#   docker compose run --rm cli dashboard   # lien de connexion au dashboard
+#   docker compose run --rm cli goal new "Pagination de la liste des commandes"
+#
+# Sans .env : agent factice (aucune clé API), dépôt cible de démonstration créé dans le
+# volume « target », tokens créés au démarrage. Les réglages sont dans .env.example.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: cfa
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-cfa}
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [core]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cfa"]
+      interval: 5s
+      retries: 10
+
+  cfa-api:
+    build: { context: ., dockerfile: build/api.Dockerfile }
+    image: cfa-api:dev
+    environment:
+      DATABASE_URL: postgres://postgres:${PG_PASSWORD:-cfa}@postgres/cfa?sslmode=disable
+      CFA_CONFIG: /etc/cfa/cfa.yaml
+      CFA_BOOTSTRAP_DIR: /var/lib/cfa          # écrit runner/token et human/token
+      CFA_DASHBOARD_ORIGIN: ${CFA_DASHBOARD_ORIGIN:-http://localhost:8080}
+    volumes:
+      - ${CFA_CONFIG_FILE:-./cfa.example.yaml}:/etc/cfa/cfa.yaml:ro
+      - runner-token:/var/lib/cfa/runner
+      - human-token:/var/lib/cfa/human
+    ports: ["127.0.0.1:8080:8080"]
+    networks: [core]
+    restart: unless-stopped
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/cfa-api", "health"]
+      interval: 5s
+      start_period: 15s
+      retries: 10
+
+  runner:
+    build: { context: ., dockerfile: build/runner.Dockerfile }
+    image: cfa-runner:dev
+    environment:
+      CFA_URL: http://cfa-api:8080
+      CFA_TOKEN_FILE: /run/cfa/token
+      CFA_CONFIG: /etc/cfa/cfa.yaml
+      CFA_AGENT_COMMAND: ${CFA_AGENT:-fake-agent}   # cfa-pi pour pi.dev (clé du fournisseur dans .env)
+      TARGET_REPO: /srv/target.git
+      CFA_INIT_TARGET: "1"                          # dépôt de démo si /srv/target.git est vide
+      CFA_WORK_DIR: /srv/work
+    env_file:
+      - path: .env
+        required: false          # clés des fournisseurs LLM
+    volumes:
+      # Dépôt cible : volume « target » par défaut, ou chemin d'un dépôt bare (TARGET_REPO dans .env).
+      - ${TARGET_REPO:-target}:/srv/target.git
+      - work:/srv/work
+      - runner-token:/run/cfa:ro
+      - ${CFA_CONFIG_FILE:-./cfa.example.yaml}:/etc/cfa/cfa.yaml:ro
+      - ./roles:/srv/roles:ro
+    networks: [core]
+    restart: unless-stopped
+    depends_on:
+      cfa-api: { condition: service_healthy }
+
+  # CLI de l'humain, sans Go sur le poste : docker compose run --rm cli <commande>
+  cli:
+    build: { context: ., dockerfile: build/runner.Dockerfile }
+    image: cfa-runner:dev
+    profiles: [cli]
+    entrypoint: ["cfa"]
+    environment:
+      CFA_URL: http://cfa-api:8080
+      CFA_TOKEN_FILE: /run/cfa/token
+    volumes: [human-token:/run/cfa:ro]
+    networks: [core]
+    depends_on:
+      cfa-api: { condition: service_healthy }
+
+networks:
+  core: {}
+
+volumes:
+  pgdata:
+  work:
+  target:
+  runner-token:
+  human-token:

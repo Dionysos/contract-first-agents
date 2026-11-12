@@ -1,0 +1,15 @@
+# Contexte de build des images (build/*.Dockerfile) : sources Go, rôles et build/pi seulement.
+# .env contient des secrets : il ne doit jamais entrer dans une image.
+.env
+.git
+.github
+.cfa
+bin
+runs
+docs
+*.test
+cfa.yaml
+final/
+# Dashboard : les dépendances et le build sont refaits dans l'image (stage node).
+dashboard/node_modules
+dashboard/dist
