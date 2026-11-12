@@ -224,11 +224,11 @@ Les agents sont pour l'instant lancés **en sous-processus dans le conteneur du 
 
 | Fichier | État |
 | --- | --- |
-| `docker-compose.yml` (postgres, cfa-api, runner, `cli`, `demo`, healthchecks, démarrage sans `.env`) | ✅ écrit, syntaxe validée (`docker compose config`), **non exécuté** (Docker indisponible pendant le développement) |
-| `scripts/compose-smoke.sh` (objectif → merge sous compose) | ✅ écrit, **non exécuté** ; le même parcours a été simulé hors Docker avec les binaires (tokens par fichier, dépôt de démo, contrôles de `cfa.example.yaml`, approbation, merge) |
-| `build/api.Dockerfile`, `build/runner.Dockerfile` (avec pi et `cfa-pi`) | ✅ écrits, **non vérifiés** |
+| `docker-compose.yml` (postgres, cfa-api, runner, `cli`, `demo`, healthchecks, démarrage sans `.env`) | ✅ vérifié : `make up` démarre la pile sans `.env`, healthchecks au vert |
+| `scripts/compose-smoke.sh` (objectif → merge sous compose) | ✅ vérifié : `make smoke` mène un objectif jusqu'au merge, approbation comprise (agent factice) |
+| `build/api.Dockerfile`, `build/runner.Dockerfile` (avec pi et `cfa-pi`) | ✅ construits par `make up` ; `cfa-pi` reste à valider par un run réel avec une clé API |
 | `build/pi/models.json` (tarifs et fenêtres des modèles récents pour pi) | ✅ vérifié avec pi 0.73.1 |
 | `.env.example`, `cfa.example.yaml` | ✅ (`cfa.example.yaml` chargé par un test) |
-| `.github/workflows/ci.yml` (tests avec PostgreSQL, lint OpenAPI, `sqlc diff`, images) | ✅ écrit, **non exécuté** |
+| `.github/workflows/ci.yml` (tests avec PostgreSQL, dashboard, contrats, compose) | ✅ vert sur GitHub Actions |
 | `build/agent.Dockerfile` (pi.dev), `build/proxy.Dockerfile`, réseau `agents` | à faire, avec le `DockerLauncher` |
 | `cmd/cfa-devdb` | ✅ PostgreSQL local sans Docker, pour le développement |

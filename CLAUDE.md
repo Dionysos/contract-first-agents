@@ -39,7 +39,5 @@ Hors phase 1 (ne pas réintroduire sans en parler) : messages et fils, rôle rev
 
 ## Prochaines étapes
 
-1. Lancer la pile sous Docker : `make up` puis `make smoke`.
-2. Run réel avec pi et une clé API (`CFA_AGENT=cfa-pi`), critère de fin de la phase 1.
-3. CI GitHub Actions verte (tests Go, dashboard, contrats, compose).
-4. Phase 2 : l'équipe qui se coordonne (voir la feuille de route).
+1. Run réel avec pi et une clé API (`CFA_AGENT=cfa-pi`), critère de fin de la phase 1.
+2. Phase 2 : l'équipe qui se coordonne (voir la feuille de route).
