@@ -1,6 +1,6 @@
 # Tests de montée en charge
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Ce document décrit comment vérifier que `cfa-api` tient la charge. **Il est prévu pour un second temps**, une fois la phase 2 de l'API livrée (messages, runs, approbations) : rien n'est encore implémenté.
 

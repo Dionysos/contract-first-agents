@@ -1,6 +1,6 @@
 # Infrastructure
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Ce document décrit le déploiement de cfa : conteneurs, images, réseaux, volumes, secrets, isolement des agents, supervision, sauvegarde et CI. L'architecture du code est dans [architecture.md](architecture.md), l'utilisation dans [integration.md](integration.md).
 
@@ -43,6 +43,8 @@ Ce document décrit le déploiement de cfa : conteneurs, images, réseaux, volum
 
 ## Services
 
+*En phase 1* : `docker-compose.yml` contient `postgres`, `cfa-api`, `runner` et `cli`. `demo` (phase 3), `egress-proxy` et les conteneurs d'agents (phase 4) n'existent pas encore.
+
 | Service | Image | Rôle | Expose | Dépend de |
 | --- | --- | --- | --- | --- |
 | `postgres` | `postgres:16` (officielle) | État et journal d'événements | rien (réseau `core`) | — |
@@ -54,6 +56,8 @@ Ce document décrit le déploiement de cfa : conteneurs, images, réseaux, volum
 | agents (`cfa-agent:<version>`) | `build/agent.Dockerfile` | Un conteneur par run ; pi.dev, git, CLI `cfa`, outils du dépôt cible | rien | lancés par le runner |
 
 ## Images
+
+*En phase 1* : seules les images `cfa-api` et du runner existent ; le runner embarque pi, `cfa-pi` et l'agent factice (voir [État actuel](#état-actuel)). `cfa-agent` et `cfa-agent-fake` relèvent de la phase 4.
 
 Toutes les images sont construites en plusieurs étapes et tournent avec un utilisateur non root.
 
@@ -68,6 +72,8 @@ L'image d'agent dépend du dépôt cible (langages, outils de test). Elle est pa
 
 ## Réseaux
 
+*Phase 4 : pas encore implémenté.*
+
 | Réseau | Type | Membres | Rôle |
 | --- | --- | --- | --- |
 | `core` | bridge interne | `postgres`, `cfa-api`, `runner`, `egress-proxy` | Communication entre services ; `postgres` n'est joignable que d'ici |
@@ -77,6 +83,8 @@ L'image d'agent dépend du dépôt cible (langages, outils de test). Elle est pa
 Les agents reçoivent `HTTPS_PROXY=http://egress-proxy:3128` ; le proxy n'autorise que les domaines des fournisseurs déclarés (`egress.allow` dans `cfa.yaml`, par exemple `api.anthropic.com`). Un agent ne peut donc ni télécharger de dépendances arbitraires ni exfiltrer le code ailleurs que chez le fournisseur. Les dépendances du dépôt cible sont précuites dans l'image d'agent, ou servies par un cache (option : miroir Go/npm dans le réseau `core`).
 
 ## Isolement d'un run
+
+*Phase 4 : pas encore implémenté.* Voir [État actuel](#état-actuel).
 
 Paramètres de création du conteneur d'agent par le runner (API Docker) :
 

@@ -1,6 +1,6 @@
 # 0003. Une table `events` pour le temps réel, l'historique et le replay
 
-- **Statut** : Accepté
+- **Statut** : Accepté (export et replay : phase 3)
 - **Date** : 2026-11-07
 
 ## Contexte

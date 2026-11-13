@@ -1,6 +1,6 @@
 # Contrats de données
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Ce document recense les formats échangés par l'application Go : avec la CLI, le runner, les agents, le dashboard et les fichiers de replay. Pour chacun, il indique la source de vérité et le type Go correspondant.
 
@@ -85,6 +85,8 @@ Enveloppe commune (`apitypes.Event`), identique en SSE, dans l'export et dans le
 Chaque payload suffit à l'affichage : un `task.status_changed` porte le titre et le rôle de la tâche, pour que le dashboard n'ait jamais à les chercher ailleurs.
 
 ## Export JSON Lines
+
+*Phase 3 : pas encore implémenté.*
 
 ```
 {"format":"cfa-events/1","goal_id":7,"exported_at":"2026-11-06T18:00:00Z","events":412}

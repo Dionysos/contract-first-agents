@@ -1,6 +1,6 @@
 # cfa — Spécifications du bus, de l'API et du runner
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 ## Contexte et objectifs
 
@@ -47,6 +47,8 @@ Participants non agents : `human` (le développeur), `runner` (le système) et `
 
 ### Types de messages
 
+*Phase 2 : pas encore implémenté.*
+
 | Type | Usage | Réponse attendue |
 | --- | --- | --- |
 | `question` | Demander une précision à un autre rôle | `answer` |
@@ -57,6 +59,8 @@ Participants non agents : `human` (le développeur), `runner` (le système) et `
 
 ### Cas d'usage
 
+*En phase 1* : seuls les cas 1 et 5 existent, sans reviewer (le runner vérifie périmètre et contrôles). Les cas 2, 3, 4 et 6 relèvent de la phase 2.
+
 1. **Nouvel objectif.** L'humain soumet « ajouter la pagination à la liste des commandes ». Le `planner` crée trois tâches : contrat (`contracts`), implémentation (`back`, dépend du contrat), affichage (`front`, dépend du contrat). Le runner lance chaque tâche dès que ses dépendances sont terminées.
 2. **Besoin d'un champ en cours de route.** L'agent `front` envoie un `contract_change` à `contracts`, met sa tâche en attente et s'arrête. Le runner réveille `contracts`, qui modifie le schéma. Si le changement est cassant, une approbation est demandée à l'humain. Le runner relance ensuite la tâche `front` avec la réponse.
 3. **Question entre rôles.** `front` demande à `back` si un champ peut être nul. Le runner lance un run de réponse de `back`, en lecture seule, qui répond à partir du code.
@@ -65,6 +69,8 @@ Participants non agents : `human` (le développeur), `runner` (le système) et `
 6. **Boucle ou dépassement.** Au-delà de 5 échanges dans un fil, ou si le budget de l'objectif est atteint, le bus bloque et crée une escalade.
 
 ### Règles de gestion
+
+*En phase 1* : pas de fils, de tentatives ni de budget ; une tâche en échec fait échouer l'objectif, l'historique n'est pas encore exportable (phase 3).
 
 - Un agent ne modifie que les chemins de son rôle ; le runner le vérifie avant de passer une tâche en relecture.
 - Toute modification de `contracts/` est faite par le rôle `contracts`.
@@ -370,6 +376,8 @@ La commande d'agent est configurable (`agent_command`) : on peut remplacer pi.de
 
 ### Mode replay
 
+*Phase 3 : pas encore implémenté.*
+
 Le replay rejoue un run enregistré, à l'identique dans le dashboard, sans base de données, sans runner et sans LLM.
 
 - **Enregistrement** : `cfa export <goal>` produit un fichier JSON Lines des événements de l'objectif, dans l'ordre, avec leurs horodatages. Les événements `run.finished` incluent le diff (tronqué au-delà d'une taille fixée) pour montrer le code produit.
@@ -380,6 +388,8 @@ Le replay rejoue un run enregistré, à l'identique dans le dashboard, sans base
 Ce mode fonctionne parce que le dashboard ne dépend que du flux d'événements (voir « Événements »).
 
 ### Sécurité et garde-fous
+
+*En phase 1* : les agents tournent en sous-processus dans le conteneur du runner, sans conteneur éphémère ni réseau filtré (phase 4) ; les limites de fils, de tentatives et de budget arrivent en phase 2.
 
 - Tokens hachés en base ; tokens d'agents à durée de vie limitée au run, avec un seul rôle.
 - Agents isolés dans des conteneurs éphémères : pas d'accès au socket Docker, réseau limité à l'API cfa et au fournisseur LLM, seul le worktree de la tâche est monté.

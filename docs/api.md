@@ -1,12 +1,14 @@
 # cfa-api — Référence de l'API
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Ce document complète [openapi.yaml](openapi.yaml), qui décrit les routes, les corps et les codes de réponse. Il couvre ce qu'OpenAPI exprime mal : droits par rôle, cycles de statut, garde-fous, effets des approbations, catalogue des événements, SSE et replay. Le contexte général est dans [cfa.md](cfa.md).
 
 Les deux fichiers font foi ensemble. `openapi.yaml` est vérifié par Redocly en CI, et les tests d'intégration et de bout en bout valident chaque échange contre lui (`internal/apitest`) : toute réponse doit être conforme, et une requête hors contrat ne doit jamais être acceptée.
 
 ## Conventions
+
+*En phase 1* : la référence exacte de ce qui est implémenté (19 routes, statuts, codes d'erreur, 10 types d'événements) est [openapi-phase1.yaml](openapi-phase1.yaml). Pas de montants ni d'`Idempotency-Key`.
 
 | Sujet | Règle |
 | --- | --- |
@@ -65,6 +67,8 @@ Un token d'agent est limité à **son objectif** : toute ressource d'un autre ob
 Un appel hors de ce tableau répond `403 forbidden`.
 
 ## Erreurs
+
+*En phase 1* : seuls les codes listés dans [openapi-phase1.yaml](openapi-phase1.yaml) existent ; ceux liés aux messages, au budget, aux tentatives et à l'idempotence arrivent avec les phases suivantes.
 
 Toutes les erreurs ont la même forme :
 
@@ -135,6 +139,8 @@ Objectif `cancelled`, tâches non terminées `failed` (raison `cancelled`), appr
 
 ### Cycle de statuts
 
+*En phase 1* : `todo → running → review → done`, et `failed` depuis tout statut non terminal. Pas de `blocked`, de `changes_requested`, de reviewer ni de compteur de tentatives : le runner passe la tâche en `done` si le périmètre et les contrôles sont bons, en `failed` sinon, et l'objectif échoue.
+
 ```
 todo ──► running ──► review ──► done
            │  ▲        │
@@ -164,9 +170,13 @@ Une tâche passe donc en `review` dès que l'agent déclare avoir fini ; le runn
 
 ### Relectures
 
+*Phase 2 : pas encore implémenté.*
+
 Chaque `POST /tasks/{id}/review` publie `task.reviewed`. `GET /tasks/{id}` renvoie la liste `reviews`, reconstruite à partir de ces événements, que `cfa task show` affiche au run suivant.
 
 ## Runs
+
+*En phase 1* : `kind` vaut `plan` ou `task` seulement ; `POST /runs/{id}/finish` n'enregistre ni tokens ni coût (étapes 2, 4 et 5 absentes), et `run.finished` ne porte pas `goal_spent_usd` ni `goal_budget_usd`.
 
 `POST /runs` enregistre le run, publie `run.started` et renvoie le token d'agent à transmettre au conteneur (`CFA_TOKEN`), avec `CFA_RUN` et `CFA_TASK`.
 
@@ -190,6 +200,8 @@ Pour tous les types : objectif non terminal (`409 goal_closed`) et pas d'approba
 Le statut de la tâche ne change pas : c'est le runner qui le fait ensuite (`review` confirmé, `changes_requested` ou `failed`). Les runs déjà lancés au moment du dépassement vont à leur terme ; ils sont bornés par `per_run_tokens` et `per_run_timeout`.
 
 ## Messages et fils
+
+*Phase 2 : pas encore implémenté.*
 
 ### Désigner le fil
 
@@ -224,6 +236,8 @@ Contrôlés dans cet ordre, dans la transaction d'insertion :
 Tout refus, y compris de validation, publie `message.rejected` avec la raison : le dashboard montre les tentatives refusées, pas seulement les messages acceptés.
 
 ## Approbations
+
+*En phase 1* : seul le type `merge` existe. Un merge refusé **annule** l'objectif (`cancelled`) au lieu de relancer le `planner`.
 
 `human` tranche avec `POST /approvals/{id}/decision` (`approve` ou `reject`, `comment`). L'API applique les effets ci-dessous dans la même transaction, puis publie `approval.resolved` ; le runner fait le reste.
 
@@ -265,6 +279,8 @@ Tous les événements ont la même forme, en SSE comme dans l'export :
 `actor` est le rôle appelant, ou `system` pour ce que l'API produit d'elle-même (budget, escalades automatiques). Chaque `payload` contient tout ce qu'il faut pour l'afficher : le dashboard ne fait aucune autre requête.
 
 ### Catalogue
+
+*En phase 1* : 10 types seulement, `goal.created`, `goal.status_changed`, `task.created`, `task.status_changed`, `run.started`, `run.finished`, `check.finished`, `approval.requested`, `approval.resolved` et `merge.done` (schémas dans [openapi-phase1.yaml](openapi-phase1.yaml)).
 
 | Type | `payload` |
 | --- | --- |
@@ -314,6 +330,8 @@ data: {"id":1284,"goal_id":7,"type":"message.sent","actor":"front","created_at":
 - **Client lent** : tampon de 1 000 événements par client ; au-delà, la connexion est fermée et le client se reconnecte avec `Last-Event-ID`.
 
 ## Export et replay
+
+*Phase 3 : pas encore implémenté.*
 
 ### Export
 

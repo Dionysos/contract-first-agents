@@ -1,6 +1,6 @@
 # Solution multi-agents — Utilisation et intégration
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 ## Vue d'ensemble
 
@@ -19,6 +19,8 @@ Tout tourne sur une seule machine avec `docker compose up`.
 ## Description fonctionnelle
 
 ### Cycle de vie d'un objectif
+
+*En phase 1* : pas de messages entre agents ni de reviewer ; le runner vérifie chaque tâche (périmètre, contrôles) et la seule approbation est le merge final. L'objectif se crée par la CLI.
 
 ```
 Humain : nouvel objectif (dashboard ou CLI)
@@ -53,6 +55,8 @@ Plus tard : création depuis une issue GitHub ou GitLab portant un label dédié
 Un objectif bien formulé décrit le résultat attendu et les contraintes (« sans breaking change », « avec tests »), pas la façon de faire : le découpage est le travail du `planner`.
 
 ### Formulaire « Nouvel objectif »
+
+*Phase 3 : pas encore implémenté.*
 
 Le formulaire s'ouvre depuis un bouton « Nouvel objectif » en haut de la vue Objectifs, dans un panneau latéral : la liste et l'activité restent visibles pendant la saisie.
 
@@ -110,6 +114,8 @@ Le dashboard agit au nom de l'humain, il lui faut donc une session :
 
 ### Le dashboard
 
+*En phase 1* : lecture seule (ni formulaire, ni boutons d'approbation) ; vues Objectifs, Graphe des tâches, Activité, Agents et détail d'un run, sans coût ni budget. Fils (phase 2) et Replay (phase 3) absents.
+
 Une page web servie par l'API, mise à jour en temps réel par le flux SSE.
 
 | Vue | Contenu |
@@ -124,6 +130,8 @@ Une page web servie par l'API, mise à jour en temps réel par le flux SSE.
 | Replay | Chargement d'un fichier exporté, lecture / pause / vitesse |
 
 ### Approbations
+
+*En phase 1* : seul `merge` existe ; un refus annule l'objectif.
 
 | Type | Déclencheur | Si approuvée | Si refusée |
 | --- | --- | --- | --- |
@@ -272,6 +280,8 @@ Une CI externe (Jenkins, GitHub Actions) peut publier sur le bus avec un token `
 
 ### Replay et démo
 
+*Phase 3 : pas encore implémenté.*
+
 Le mode replay rejoue un run exporté, sans clé API, sans base et sans runner (détail dans [cfa.md](cfa.md#mode-replay)).
 
 ```bash
@@ -286,6 +296,8 @@ Usages :
 - **Non-régression** : vérifier qu'une évolution du dashboard affiche toujours correctement les anciens runs.
 
 ### Mesure
+
+*Prévu, sans phase attribuée : pas encore implémenté.*
 
 Un petit banc d'objectifs de référence permet de chiffrer la solution :
 

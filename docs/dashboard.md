@@ -1,6 +1,6 @@
 # Dashboard
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Le dashboard montre en direct le travail des agents : objectifs, graphe des tâches, conversations, approbations, coûts. Il sert aussi de lecteur pour les runs enregistrés (replay). Ce document décrit ce qu'il affiche, d'où viennent ses données et comment il est construit. Paramètres utiles (démos, captures) : `theme=dark|light`, `at=end|<n>` (position), `autoplay=0`, `speed=1|4|16`, `goal=<id>`, `tab=threads|approvals|runs`, `run=<id>` (ouvre le détail), `new` (ouvre le formulaire « Nouvel objectif »). Les vues et le formulaire sont présentés du point de vue de l'utilisateur dans [integration.md](integration.md#le-dashboard).
 
@@ -8,10 +8,12 @@ Le dashboard montre en direct le travail des agents : objectifs, graphe des tâc
 
 - **Un seul flux de données : les événements.** L'état affiché est reconstruit en appliquant les événements dans l'ordre (`state = reduce(state, event)`). Aucune autre lecture de l'API n'est nécessaire. C'est ce qui rend le replay identique au direct.
 - **Trois sources, un même moteur** : flux SSE de l'API, fichier `.jsonl` chargé dans le navigateur, ou démo intégrée.
-- **Sans étape de build.** HTML, CSS et JavaScript natifs, embarqués dans le binaire `cfa-api` (`dashboard/`), sans dépendance externe ni CDN : la page fonctionne hors ligne et en page statique (GitHub Pages).
+- **React, TypeScript, Bootstrap** ([ADR 0016](adr/0016-dashboard-react-typescript-bootstrap.md)) : construit par Vite, embarqué dans le binaire `cfa-api`, sans CDN ; la page fonctionne hors ligne et, à terme, en page statique (phase 3).
 - **Lecture d'abord.** Les actions (approuver, refuser, nouvel objectif) passent par les routes REST. Elles sont masquées ou désactivées en replay.
 
 ## Sources de données
+
+*En phase 1* : seule la source Direct existe.
 
 | Source | Quand | Comment |
 | --- | --- | --- |
@@ -29,12 +31,16 @@ Au démarrage, la page interroge `/healthz` :
 
 ## Lecteur (replay local)
 
+*Phase 3 : pas encore implémenté.*
+
 - Les événements du fichier sont chargés en mémoire. Le lecteur applique ceux dont l'index est inférieur à la position courante.
 - **Lecture / pause**, **vitesse** ×1, ×4, ×16, **curseur** pour aller à n'importe quel événement, **fin** pour tout afficher d'un coup.
 - Les intervalles d'origine sont respectés, mais chaque attente est plafonnée à 2 secondes (à ×1) : un run de 20 minutes sans événement ne fige pas la démo.
 - Revenir en arrière recalcule l'état depuis le début : quelques centaines d'événements se rejouent en quelques millisecondes.
 
 ## Écran
+
+*En phase 1* : pas de fils, de coûts, de budget, de tentatives ni de lecteur ; les approbations s'affichent sans boutons (décision par la CLI). Capture réelle : [dashboard-phase1-dark.png](screenshots/dashboard-phase1-dark.png).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -89,26 +95,22 @@ Les couleurs sont doublées d'une icône et d'un libellé : l'information ne pas
 
 ```
 dashboard/
-  index.html     structure de la page
-  app.css        thème (sombre par défaut, clair selon le système), mise en page
-  app.js         état, réducteur, sources, lecteur, rendu
-  demo.jsonl     démo intégrée (générée par cmd/cfa-mock)
-  embed.go       embarquement dans cfa-api
+  index.html, vite.config.ts   point d'entrée et build (Vite)
+  src/main.tsx, App.tsx        montage, mise en page, thème (?theme=dark|light)
+  src/useEventStream.ts        connexion SSE (EventSource, reprise par Last-Event-ID)
+  src/state.ts                 réducteur : état dérivé des événements (useReducer)
+  src/api/types.ts             types générés depuis les contrats Go (make types)
+  src/components/              TopBar, GoalList, TaskGraph, DetailTabs, ActivityFeed, AgentBar, RunDrawer, StatusBadge
+  embed.go                     embarquement du build dans cfa-api
 ```
 
-Organisation de `app.js` :
-
-| Partie | Rôle |
-| --- | --- |
-| `initialState()`, `reduce(state, event)` | État dérivé des événements : objectifs, tâches, fils, messages, approbations, runs, agents, activité |
-| `sources` | `connectSSE()`, `loadFile(file)`, `loadURL(url)` |
-| `Player` | Lecture, pause, vitesse, position ; recalcul de l'état en cas de retour arrière |
-| `render*()` | Une fonction par zone, appelées au plus une fois par image (`requestAnimationFrame`) |
-| `actions` | Appels REST (décision d'approbation) ; désactivés en replay |
+Prévus : le lecteur de replay et la démo intégrée (phase 3), les fils et les coûts (phase 2), les actions REST depuis la page (phase 3).
 
 Tout texte venant des événements est échappé avant insertion dans la page.
 
 ## Données de démo
+
+*Phase 3 : pas encore implémenté.*
 
 `cmd/cfa-mock` génère `dashboard/demo.jsonl` avec les types Go des contrats (`apitypes`, `events`) : la démo respecte donc exactement le format réel. Le scénario couvre :
 
@@ -125,6 +127,8 @@ go run ./cmd/cfa-mock > dashboard/demo.jsonl
 ```
 
 ## Formulaire « Nouvel objectif »
+
+*Phase 3 : pas encore implémenté.*
 
 Bouton « ＋ Nouvel objectif » en haut du panneau Objectifs ; le formulaire s'ouvre dans le panneau latéral. Règles fonctionnelles : [integration.md](integration.md#formulaire-nouvel-objectif).
 

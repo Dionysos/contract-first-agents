@@ -1,6 +1,6 @@
 # Base de données
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 PostgreSQL 16. Le schéma est défini par les migrations de [migrations/](../migrations/) ; ce document les explique. En cas d'écart, la migration fait foi.
 
@@ -31,6 +31,8 @@ sessions, login_codes                 (dashboard, sans lien)
 ```
 
 ## Tables
+
+*En phase 1* : le schéma réel est [migrations/00001_init.sql](../migrations/00001_init.sql). Il n'a ni `threads`, ni `messages`, ni `idempotency_keys`, ni colonnes de budget, de coût ou de tentatives.
 
 ### `goals` — objectifs
 
@@ -69,6 +71,8 @@ sessions, login_codes                 (dashboard, sans lien)
 
 ### `threads` — fils
 
+*Phase 2 : pas encore implémenté.*
+
 | Colonne | Type | Règle |
 | --- | --- | --- |
 | `goal_id` | `BIGINT` | → `goals` |
@@ -78,6 +82,8 @@ sessions, login_codes                 (dashboard, sans lien)
 | `status` | `TEXT` | `open` (défaut), `closed`, `escalated` |
 
 ### `messages`
+
+*Phase 2 : pas encore implémenté.*
 
 | Colonne | Type | Règle |
 | --- | --- | --- |
@@ -173,6 +179,8 @@ SELECT pg_advisory_xact_lock(7243);   -- clé fixe « cfa_events »
 Les écritures sont sérialisées, et les ids deviennent visibles dans l'ordre. Le volume visé (quelques écritures par seconde) le permet sans peine. Le verrou est pris en début de transaction, avant toute lecture d'état, ce qui sérialise aussi les contrôles métier (hop, quota, budget) sans `SELECT … FOR UPDATE` dispersés.
 
 ## Montants
+
+*Phase 2 : pas encore implémenté.*
 
 `NUMERIC` en base, `float64` en Go (conversion par pgx). Les montants restent petits (budgets de quelques dollars, quatre décimales) : l'imprécision du flottant est négligeable pour l'affichage. Les comparaisons au budget se font en SQL, sur des `NUMERIC`.
 

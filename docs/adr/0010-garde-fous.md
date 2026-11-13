@@ -1,6 +1,6 @@
 # 0010. Garde-fous de coordination
 
-- **Statut** : Accepté
+- **Statut** : Accepté (fils, tentatives, budget : phase 2 ; en phase 1, pas de nouvelle tentative)
 - **Date** : 2026-11-07
 
 ## Contexte

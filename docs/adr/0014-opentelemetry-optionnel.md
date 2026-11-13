@@ -1,6 +1,6 @@
 # 0014. Observabilité : OpenTelemetry optionnel, export OTLP
 
-- **Statut** : Accepté
+- **Statut** : Accepté (phase 4 : pas encore implémenté)
 - **Date** : 2026-11-07
 
 ## Contexte

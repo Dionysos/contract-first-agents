@@ -1,6 +1,6 @@
 # Architecture de l'application Go
 
-> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). La [feuille de route](../README.md#feuille-de-route) indique ce qui est déjà en place.
+> **Cible complète.** Ce document décrit le système visé au terme des quatre phases, pas seulement le code de ce dépôt (phase 1). Une section qui commence par *Phase 2*, *Phase 3*, *Phase 4* ou *Prévu* n'est pas encore implémentée ; une note *En phase 1* signale ce qui diffère aujourd'hui. La [feuille de route](../README.fr.md#feuille-de-route) indique ce qui est déjà en place.
 
 Ce document décrit l'organisation du code Go de cfa : les packages, leurs types et leurs méthodes. Il complète [cfa.md](cfa.md) (le quoi), [api.md](api.md) (les règles de l'API), [database.md](database.md) (le schéma) et [data-contracts.md](data-contracts.md) (les formats échangés).
 
@@ -437,6 +437,8 @@ Implémentations : `DockerLauncher` (API Docker via le socket, paramètres d'iso
 
 ### Règles de décision
 
+*En phase 1* : pas de runs `answer` ni `review`, ni de statuts `blocked` et `changes_requested` ; un périmètre ou un contrôle en échec fait passer la tâche en `failed`, et un merge refusé annule l'objectif.
+
 | Situation (vue) | Action |
 | --- | --- |
 | Objectif `planning` sans run `plan` actif | `StartPlan` |
@@ -564,6 +566,8 @@ runner ──► cfa-pi ──► pi --mode json --no-session --model <role.mode
 
 ## Observabilité (OpenTelemetry)
 
+*Phase 4 : pas encore implémenté.*
+
 Paquet `internal/telemetry`, décision : [ADR 0014](adr/0014-opentelemetry-optionnel.md). **Désactivé par défaut** : sans `OTEL_EXPORTER_OTLP_ENDPOINT` (ou `…_TRACES_ENDPOINT`, `…_METRICS_ENDPOINT`), aucun exporteur n'est créé et l'instrumentation ne coûte rien. Configuration par les variables standard (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_SDK_DISABLED`…), export OTLP/HTTP.
 
 | Fonction | Rôle |
@@ -630,13 +634,15 @@ runner ──POST /approvals (merge)──► API (goal awaiting_approval) ─�
 humain ──approuver──► API ──approval.resolved──► runner ── merge ──► POST /goals/{id}/merged
 ```
 
-## Phases de l'API
+## Étapes de construction de l'API (cible)
 
-| Phase | Contenu | Livrable vérifiable |
+Découpage interne de la construction de l'API cible, à ne pas confondre avec les quatre phases de la [feuille de route](../README.fr.md#feuille-de-route). Dans ce dépôt (phase 1), seule une partie de chaque étape existe : la colonne de droite l'indique.
+
+| Étape | Contenu (cible) | Dans ce dépôt (phase 1) |
 | --- | --- | --- |
-| **1 — Socle** ✅ | Config, migrations, store et sqlc, tokens, erreurs, événements, hub et SSE, objectifs, tâches, relecture, `/healthz`, dashboard embarqué, mode replay | Créer un objectif et des tâches au `curl`, les voir passer dans `GET /events` |
-| **2 — Coordination** ✅ | Messages, fils, boîte de réception, garde-fous (hop, quota), approbations et leurs effets, runs et tokens d'agents, budget, contrôles, merge | Le scénario de bout en bout de l'agent factice passe contre l'API |
-| **3 — Accès et replay** ✅ | Sessions du dashboard, `/config/public`, export, mode replay, client Go et CLI `cfa` | `cfa export` puis `cfa-api --replay` rejoue un objectif dans le dashboard |
+| **1 — Socle** | Config, migrations, store et sqlc, tokens, erreurs, événements, hub et SSE, objectifs, tâches, relecture, `/healthz`, dashboard embarqué, mode replay | Tout, sauf la relecture (phase 2) et le mode replay (phase 3) |
+| **2 — Coordination** | Messages, fils, boîte de réception, garde-fous (hop, quota), approbations et leurs effets, runs et tokens d'agents, budget, contrôles, merge | Runs et tokens d'agents, contrôles, approbation `merge` ; messages, fils, garde-fous et budget en phase 2 |
+| **3 — Accès et replay** | Sessions du dashboard, `/config/public`, export, mode replay, client Go et CLI `cfa` | Sessions, client Go et CLI `cfa` ; `/config/public`, export et replay en phase 3 |
 
 ## Tests
 

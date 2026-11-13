@@ -7,7 +7,8 @@ info:
   description: |
     **Cible complète.** Cette spécification décrit l'API visée au terme des quatre phases,
     pas seulement celle de ce dépôt (phase 1) : certaines routes (messages, budget, replay…)
-    ne sont pas encore implémentées. Voir la feuille de route du README.
+    ne sont pas encore implémentées. Voir la feuille de route du README ; l'API réellement
+    implémentée dans ce dépôt est décrite par `docs/openapi-phase1.yaml`.
 
     API HTTP de `cfa-api` (Go, `net/http` + `pgx`). Référence des routes, des corps et des codes.
     Les règles qui s'expriment mal en OpenAPI (transitions de statut, garde-fous, catalogue des
