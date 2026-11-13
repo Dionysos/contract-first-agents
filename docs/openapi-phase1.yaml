@@ -1,0 +1,1173 @@
+# Phase 1 (ce dépôt) : l'API telle qu'implémentée par cfa-api. La cible complète est dans openapi.yaml.
+openapi: 3.1.0
+info:
+  title: cfa API (phase 1)
+  version: 0.1.0
+  summary: Bus de tâches pour une équipe d'agents IA, phase 1 (MVP).
+  description: |
+    **Phase 1.** Cette spécification décrit l'API implémentée dans ce dépôt
+    (`internal/api`, `internal/apitypes`, `internal/events`). La cible complète des quatre phases
+    (messages et fils, relecture, budget, replay, idempotence…) est dans `openapi.yaml`.
+    En cas d'écart, le code fait foi.
+
+    API HTTP de `cfa-api` (Go, `net/http` + `pgx`). Les règles qui s'expriment mal en OpenAPI
+    (transitions de statut, catalogue des événements, SSE) sont détaillées dans `docs/api.md`,
+    qui décrit lui aussi la cible complète.
+
+    Conventions : JSON UTF-8, champs en `snake_case`, identifiants entiers, dates RFC 3339 en UTC.
+    Les corps JSON sont lus strictement : `Content-Type: application/json` obligatoire, 1 Mio
+    maximum, champs inconnus refusés (`422 validation_failed`). Dans les réponses, un champ
+    nullable vaut `null` (jamais absent) et une liste vide vaut `[]`. Toute écriture produit au
+    moins un événement.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Écoute locale par défaut
+
+security:
+  - bearer: []
+  - session: []
+
+tags:
+  - name: goals
+    description: Objectifs soumis par l'humain
+  - name: tasks
+    description: Tâches créées par le planner et exécutées par les rôles
+  - name: approvals
+    description: Approbation humaine du merge
+  - name: runs
+    description: Exécutions d'agents, déclarées par le runner
+  - name: checks
+    description: Résultats des contrôles du runner
+  - name: events
+    description: Flux temps réel
+  - name: auth
+    description: Session du dashboard
+  - name: system
+    description: Supervision, dashboard
+
+paths:
+  /goals:
+    post:
+      tags: [goals]
+      operationId: createGoal
+      summary: Soumettre un objectif
+      description: |
+        Appelant : `human`. Crée l'objectif en statut `planning` avec sa branche `goal/<id>`, et
+        publie `goal.created`. Le runner lance alors un run `plan`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoalCreate' }
+            example:
+              title: Pagination de la liste des commandes
+              description: La liste doit être paginée (20 par page). Pas de breaking change. Tests attendus.
+              base_branch: main
+      responses:
+        '201':
+          description: Objectif créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    get:
+      tags: [goals]
+      operationId: listGoals
+      summary: Lister les objectifs
+      description: "Appelant : tous. Un agent ne voit que l'objectif de son run. Tri par id décroissant."
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/GoalStatus' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Before'
+      responses:
+        '200':
+          description: Page d'objectifs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GoalPage' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /goals/{id}:
+    get:
+      tags: [goals]
+      operationId: getGoal
+      summary: Détail d'un objectif
+      description: "Appelant : tous (un agent, seulement l'objectif de son run)."
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Objectif avec ses tâches, approbations et runs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GoalDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /goals/{id}/cancel:
+    post:
+      tags: [goals]
+      operationId: cancelGoal
+      summary: Annuler un objectif
+      description: |
+        Appelant : `human`. L'objectif passe en `cancelled`, ses tâches non terminées en `failed`
+        (raison `cancelled`), son approbation en attente en `rejected`. Le runner arrête les runs
+        en cours en réagissant à `goal.status_changed`. Idempotent sur un objectif déjà annulé ;
+        `409 goal_closed` sur un objectif `done` ou `failed`. Corps facultatif.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoalCancel' }
+      responses:
+        '200':
+          description: Objectif annulé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /goals/{id}/status:
+    post:
+      tags: [goals]
+      operationId: setGoalStatus
+      summary: Changer le statut d'un objectif (runner)
+      description: |
+        Appelant : `runner`. Transitions autorisées : `planning → running` (refusée tant que
+        l'objectif n'a aucune tâche), `running → planning` et tout statut non terminal `→ failed`.
+        Les autres transitions sont automatiques : `awaiting_approval` à la création de
+        l'approbation de merge, `cancelled` sur annulation ou refus du merge, `done` par
+        `POST /goals/{id}/merged`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoalStatusChange' }
+      responses:
+        '200':
+          description: Statut changé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /goals/{id}/merged:
+    post:
+      tags: [goals]
+      operationId: markGoalMerged
+      summary: Enregistrer le merge (runner)
+      description: |
+        Appelant : `runner`, après le merge local de `goal/<id>` dans la branche de base.
+        L'objectif passe de `awaiting_approval` à `done` et `merge.done` est publié.
+        Refusé (`409 invalid_transition`) sans approbation `merge` acceptée.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoalMerged' }
+      responses:
+        '200':
+          description: Objectif terminé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Goal' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /tasks:
+    post:
+      tags: [tasks]
+      operationId: createTask
+      summary: Créer une tâche
+      description: |
+        Appelant : `planner` (token d'un run `plan`) ou `human`. Pour le planner, `goal_id` est
+        déduit du run et doit lui correspondre s'il est fourni. L'objectif doit être en `planning`
+        ou `running`. Les dépendances doivent exister et appartenir au même objectif (pas de cycle
+        possible). La tâche est créée en `todo` avec sa branche `task/<objectif>-<tâche>-<rôle>`,
+        et `task.created` est publié.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCreate' }
+            example:
+              role: back
+              title: Pagination côté API
+              spec: GET /orders accepte page et per_page, selon contracts/orders.yaml.
+              depends_on: [1]
+      responses:
+        '201':
+          description: Tâche créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /tasks/{id}:
+    get:
+      tags: [tasks]
+      operationId: getTask
+      summary: Détail d'une tâche
+      description: |
+        Appelant : tous (un agent, seulement les tâches de son objectif). Utilisé par
+        `cfa task show` : spec, dépendances, run en cours.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      responses:
+        '200':
+          description: Tâche
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tasks/{id}/status:
+    post:
+      tags: [tasks]
+      operationId: setTaskStatus
+      summary: Changer le statut d'une tâche
+      description: |
+        Appelant : l'agent du run `task` en cours sur cette tâche, ou `runner`.
+
+        | Transition | Appelant |
+        | --- | --- |
+        | `running → review` | agent de la tâche (`cfa task done`), `summary` obligatoire |
+        | `review → done` | `runner`, après les contrôles de périmètre et du rôle |
+        | `running → failed` | agent de la tâche (`cfa task fail`) ou `runner`, `reason` obligatoire |
+        | `todo → failed`, `review → failed` | `runner`, `reason` obligatoire |
+
+        Le passage en `running` se fait par `POST /runs`. Toute autre transition :
+        `409 invalid_transition`. Pas de nouvelle tentative en phase 1 : une tâche en `failed`
+        fait échouer l'objectif.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskStatusChange' }
+            examples:
+              done:
+                value: { status: review, summary: "Endpoint paginé, tests ajoutés" }
+              fail:
+                value: { status: failed, reason: "Le contrat ne définit pas per_page" }
+      responses:
+        '200':
+          description: Statut changé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /approvals:
+    get:
+      tags: [approvals]
+      operationId: listApprovals
+      summary: Lister les approbations
+      description: "Appelant : `human`. Tri par id croissant (les plus anciennes d'abord)."
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/ApprovalStatus' }
+        - name: goal
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Approbations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+    post:
+      tags: [approvals]
+      operationId: createApproval
+      summary: Demander l'approbation du merge (runner)
+      description: |
+        Appelant : `runner`, quand toutes les tâches sont fusionnées dans `goal/<id>`. Seul le type
+        `merge` existe en phase 1. L'objectif passe de `running` à `awaiting_approval` et
+        `approval.requested` est publié. Refus `409 duplicate_approval` si une approbation de merge
+        est déjà en attente pour cet objectif.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalCreate' }
+      responses:
+        '201':
+          description: Approbation créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /approvals/{id}/decision:
+    post:
+      tags: [approvals]
+      operationId: decideApproval
+      summary: Approuver ou refuser le merge
+      description: |
+        Appelant : `human`. L'approbation doit être `pending` (sinon `409 already_decided`).
+        Publie `approval.resolved`. `approve` : le runner merge puis appelle
+        `POST /goals/{id}/merged`. `reject` (commentaire obligatoire) : l'objectif passe en
+        `cancelled`.
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecision' }
+      responses:
+        '200':
+          description: Décision enregistrée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /runs:
+    post:
+      tags: [runs]
+      operationId: createRun
+      summary: Déclarer un run (runner)
+      description: |
+        Appelant : `runner`. Enregistre le run, publie `run.started` et renvoie un token d'agent lié
+        au run et au rôle, valable `run_timeout` + 5 minutes et révoqué à la fin du run.
+
+        Préconditions par `kind` :
+        - `plan` : objectif en `planning`, rôle `planner`.
+        - `task` : `task_id` obligatoire, tâche en `todo` de cet objectif, rôle de la tâche, toutes
+          les dépendances en `done`. Passe la tâche en `running`.
+
+        Pour les deux : objectif non terminal (sinon `409 goal_closed`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunCreate' }
+      responses:
+        '201':
+          description: Run déclaré
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RunCreated' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /runs/{id}/finish:
+    post:
+      tags: [runs]
+      operationId: finishRun
+      summary: Enregistrer la fin d'un run (runner)
+      description: |
+        Appelant : `runner`. Enregistre le résultat, révoque le token d'agent et publie
+        `run.finished`. Ne change pas le statut de la tâche : c'est au runner de le faire ensuite.
+        Run en `running` uniquement (sinon `409 invalid_transition`).
+      parameters: [{ $ref: '#/components/parameters/Id' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RunFinish' }
+      responses:
+        '200':
+          description: Run terminé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /checks:
+    post:
+      tags: [checks]
+      operationId: reportCheck
+      summary: Publier le résultat d'un contrôle (runner)
+      description: |
+        Appelant : `runner`. Publie `check.finished`. Les contrôles ne sont pas stockés hors du
+        journal d'événements.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckReport' }
+      responses:
+        '202':
+          description: Résultat publié
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventRef' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /events:
+    get:
+      tags: [events]
+      operationId: streamEvents
+      summary: Flux d'événements (SSE)
+      description: |
+        Appelant : tous (un agent, seulement l'objectif de son run). Connexion `text/event-stream`
+        ouverte, qui commence par `retry: 3000`. Chaque événement est envoyé avec `id:` (id de
+        l'événement), `event:` (type) et `data:` (l'objet `Event` complet sur une ligne).
+        Point de départ : `Last-Event-ID` s'il est présent, sinon `since`, sinon seulement les
+        nouveaux événements. Un commentaire `: ping` est envoyé toutes les 15 secondes.
+      parameters:
+        - name: goal
+          in: query
+          schema: { type: integer }
+          description: Ne recevoir que les événements de cet objectif.
+        - name: since
+          in: query
+          schema: { type: integer, minimum: 0 }
+          description: Renvoyer d'abord les événements d'id strictement supérieur ; `0` rejoue tout.
+        - name: Last-Event-ID
+          in: header
+          schema: { type: string }
+          description: Envoyé par le navigateur à la reconnexion ; prioritaire sur `since`.
+      responses:
+        '200':
+          description: Flux SSE
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Le champ `data` de chaque événement SSE est un objet `Event` sérialisé (voir `x-data-schema`).
+              x-data-schema:
+                $ref: '#/components/schemas/Event'
+              example: |
+                id: 42
+                event: task.status_changed
+                data: {"id":42,"goal_id":1,"type":"task.status_changed","actor":"back","created_at":"2026-11-12T11:45:30Z","payload":{"task_id":2,"role":"back","title":"Pagination côté API","from":"running","to":"review","reason":null,"summary":"Endpoint paginé"}}
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationFailed' }
+
+  /auth/code:
+    post:
+      tags: [auth]
+      operationId: createLoginCode
+      summary: Créer un code de connexion au dashboard
+      description: |
+        Appelant : `human`, par token uniquement (pas par cookie). Code à usage unique valable
+        2 minutes, utilisé par `cfa dashboard`.
+      security:
+        - bearer: []
+      responses:
+        '201':
+          description: Code créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginCode' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /login:
+    get:
+      tags: [auth]
+      operationId: login
+      summary: Échanger un code contre une session
+      description: |
+        Sans authentification. Code valide : cookie `cfa_session` (`HttpOnly`, `SameSite=Strict`,
+        `Secure` si le dashboard est en HTTPS, 12 heures) et redirection vers `/`. Code invalide,
+        expiré ou déjà utilisé : `401` avec une page texte invitant à relancer `cfa dashboard`.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '303':
+          description: Session créée, redirection vers le dashboard
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+            Location:
+              schema: { type: string, const: / }
+        '401':
+          description: Code invalide, expiré ou déjà utilisé
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /healthz:
+    get:
+      tags: [system]
+      operationId: healthz
+      summary: Supervision
+      security: []
+      responses:
+        '200':
+          description: API et base disponibles
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Base indisponible
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /:
+    get:
+      tags: [system]
+      operationId: dashboard
+      summary: Dashboard
+      description: Page statique embarquée (lecture seule). Sans session, elle invite à lancer `cfa dashboard`.
+      security: []
+      responses:
+        '200':
+          description: Page HTML
+          content:
+            text/html:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: |
+        Token `human`, `runner` (créés au démarrage) ou token d'agent émis par `POST /runs`.
+        Le rôle appelant (et, pour un agent, son run et son objectif) est déduit du token.
+    session:
+      type: apiKey
+      in: cookie
+      name: cfa_session
+      description: |
+        Session du dashboard (rôle `human`), obtenue par `GET /login`. Les requêtes d'écriture
+        doivent porter un en-tête `Origin` égal à l'adresse du dashboard, sinon
+        `403 origin_mismatch`.
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Before:
+      name: before
+      in: query
+      schema: { type: integer }
+      description: Ne renvoyer que les éléments d'id strictement inférieur.
+
+  responses:
+    Unauthorized:
+      description: Token ou session absent, invalide ou expiré (`unauthorized`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Rôle non autorisé ou `Origin` invalide (`forbidden`, `origin_mismatch`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Ressource inexistante ou hors du périmètre de l'appelant (`not_found`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Règle métier refusée (`invalid_transition`, `duplicate_approval`, `already_decided`, `goal_closed`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: invalid_transition
+            message: "Aucune tâche : l'objectif ne peut pas démarrer"
+    PayloadTooLarge:
+      description: Corps de plus de 1 Mio (`payload_too_large`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: 'Corps envoyé sans `Content-Type: application/json` (`unsupported_media_type`)'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ValidationFailed:
+      description: Corps ou paramètre invalide ; erreurs par champ (`validation_failed`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            code: validation_failed
+            message: Requête invalide
+            errors:
+              title: entre 5 et 120 caractères
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Code stable, à utiliser par les clients.
+          enum:
+            - unauthorized
+            - forbidden
+            - origin_mismatch
+            - not_found
+            - validation_failed
+            - unsupported_media_type
+            - payload_too_large
+            - invalid_transition
+            - duplicate_approval
+            - already_decided
+            - goal_closed
+            - internal
+        message:
+          type: string
+          description: Message lisible, en français.
+        errors:
+          type: object
+          additionalProperties: { type: string }
+          description: Erreurs par champ (seulement avec `validation_failed`).
+
+    Role:
+      type: string
+      description: |
+        Nom d'un rôle d'agent déclaré dans `cfa.yaml` (par défaut `planner`, `contracts`, `back`,
+        `front`) ou participant non agent (`human`, `runner`, et `system` pour l'API elle-même).
+      examples: [back]
+
+    GoalStatus:
+      type: string
+      enum: [planning, running, awaiting_approval, done, failed, cancelled]
+
+    GoalCreate:
+      type: object
+      required: [title, description]
+      additionalProperties: false
+      properties:
+        title: { type: string, minLength: 5, maxLength: 120 }
+        description:
+          type: string
+          minLength: 20
+          maxLength: 5000
+          description: Markdown accepté.
+        base_branch:
+          type: string
+          description: Branche du dépôt cible ; défaut `base_branch` de la configuration.
+
+    Goal:
+      type: object
+      required: [id, title, description, status, base_branch, branch, created_at, finished_at]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        status: { $ref: '#/components/schemas/GoalStatus' }
+        base_branch: { type: string, examples: [main] }
+        branch: { type: string, examples: [goal/1] }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+    GoalPage:
+      type: object
+      required: [items, next_before]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Goal' }
+        next_before:
+          type: [integer, 'null']
+          description: Valeur à passer à `before` pour la page suivante ; `null` en fin de liste.
+
+    GoalDetail:
+      allOf:
+        - $ref: '#/components/schemas/Goal'
+        - type: object
+          required: [tasks, approvals, runs]
+          properties:
+            tasks:
+              type: array
+              items: { $ref: '#/components/schemas/Task' }
+            approvals:
+              type: array
+              items: { $ref: '#/components/schemas/Approval' }
+            runs:
+              type: array
+              items: { $ref: '#/components/schemas/Run' }
+
+    GoalCancel:
+      type: object
+      additionalProperties: false
+      properties:
+        reason: { type: string }
+
+    GoalStatusChange:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [planning, running, failed]
+        reason: { type: string }
+
+    GoalMerged:
+      type: object
+      required: [commit]
+      additionalProperties: false
+      properties:
+        commit:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: SHA du commit de merge dans la branche de base.
+
+    TaskStatus:
+      type: string
+      enum: [todo, running, review, done, failed]
+      description: "`review` : terminée par l'agent, en vérification par le runner."
+
+    TaskCreate:
+      type: object
+      required: [role, title, spec]
+      additionalProperties: false
+      properties:
+        goal_id:
+          type: integer
+          description: Obligatoire pour `human` ; déduit du run pour le planner.
+        role:
+          $ref: '#/components/schemas/Role'
+          description: Rôle d'agent déclaré, autre que `planner`.
+        title: { type: string, minLength: 5, maxLength: 120 }
+        spec:
+          type: string
+          minLength: 1
+          maxLength: 20000
+          description: Markdown.
+        depends_on:
+          type: array
+          items: { type: integer }
+          uniqueItems: true
+          default: []
+
+    Task:
+      type: object
+      required: [id, goal_id, role, title, spec, status, branch, depends_on, summary, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        role: { $ref: '#/components/schemas/Role' }
+        title: { type: string }
+        spec: { type: string }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        branch: { type: string, examples: [task/1-2-back] }
+        depends_on:
+          type: array
+          items: { type: integer }
+        summary:
+          type: [string, 'null']
+          description: Résumé donné par l'agent au passage en `review`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TaskDetail:
+      allOf:
+        - $ref: '#/components/schemas/Task'
+        - type: object
+          required: [current_run]
+          properties:
+            current_run:
+              oneOf:
+                - $ref: '#/components/schemas/Run'
+                - type: 'null'
+
+    TaskStatusChange:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [review, done, failed]
+        summary: { type: string, minLength: 1, maxLength: 2000, description: Obligatoire avec `review`. }
+        reason: { type: string, minLength: 1, maxLength: 10000, description: Obligatoire avec `failed`. }
+
+    ApprovalKind:
+      type: string
+      enum: [merge]
+      description: "Phase 1 : seul le merge demande une décision humaine."
+
+    ApprovalStatus:
+      type: string
+      enum: [pending, approved, rejected]
+
+    ApprovalCreate:
+      type: object
+      required: [goal_id, kind, payload]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        kind: { $ref: '#/components/schemas/ApprovalKind' }
+        payload: { $ref: '#/components/schemas/MergePayload' }
+
+    Approval:
+      type: object
+      required: [id, goal_id, kind, payload, status, comment, created_at, decided_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        kind: { $ref: '#/components/schemas/ApprovalKind' }
+        payload: { $ref: '#/components/schemas/MergePayload' }
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        comment: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        decided_at: { type: [string, 'null'], format: date-time }
+
+    MergePayload:
+      type: object
+      required: [branch, base_branch, diffstat]
+      properties:
+        branch: { type: string, minLength: 1, maxLength: 200, examples: [goal/1] }
+        base_branch: { type: string, minLength: 1, maxLength: 200, examples: [main] }
+        diffstat: { $ref: '#/components/schemas/Diffstat' }
+
+    ApprovalDecision:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        decision: { type: string, enum: [approve, reject] }
+        comment:
+          type: string
+          maxLength: 10000
+          description: Obligatoire pour `reject`.
+
+    RunKind:
+      type: string
+      enum: [task, plan]
+
+    RunStatus:
+      type: string
+      enum: [running, succeeded, failed, killed]
+
+    RunCreate:
+      type: object
+      required: [goal_id, kind, role, model]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        task_id: { type: integer, description: Obligatoire pour `task`. }
+        kind: { $ref: '#/components/schemas/RunKind' }
+        role: { $ref: '#/components/schemas/Role' }
+        model:
+          type: string
+          minLength: 1
+          maxLength: 200
+          examples: [anthropic/claude-sonnet-5-5]
+
+    RunCreated:
+      type: object
+      required: [run, token, expires_at]
+      properties:
+        run: { $ref: '#/components/schemas/Run' }
+        token:
+          type: string
+          description: Token d'agent en clair ; renvoyé une seule fois, stocké haché.
+        expires_at: { type: string, format: date-time }
+
+    Run:
+      type: object
+      required: [id, goal_id, task_id, kind, role, model, status, started_at, finished_at]
+      properties:
+        id: { type: integer }
+        goal_id: { type: integer }
+        task_id: { type: [integer, 'null'] }
+        kind: { $ref: '#/components/schemas/RunKind' }
+        role: { $ref: '#/components/schemas/Role' }
+        model: { type: string }
+        status: { $ref: '#/components/schemas/RunStatus' }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+
+    RunFinish:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [succeeded, failed, killed]
+        error: { type: string, description: Cause de l'échec ou de l'arrêt. }
+        diffstat: { $ref: '#/components/schemas/Diffstat' }
+        files:
+          type: array
+          items: { type: string }
+          description: Fichiers modifiés (`git diff --name-only`).
+
+    Diffstat:
+      type: object
+      required: [files, insertions, deletions]
+      properties:
+        files: { type: integer }
+        insertions: { type: integer }
+        deletions: { type: integer }
+
+    CheckStatus:
+      type: string
+      enum: [passed, failed, error]
+
+    CheckReport:
+      type: object
+      required: [goal_id, name, status]
+      additionalProperties: false
+      properties:
+        goal_id: { type: integer }
+        task_id: { type: integer }
+        run_id: { type: integer }
+        name: { type: string, minLength: 1, maxLength: 100, examples: [test-api] }
+        command: { type: string, examples: [make test-api] }
+        status: { $ref: '#/components/schemas/CheckStatus' }
+        duration_ms: { type: integer, minimum: 0 }
+        output:
+          type: string
+          maxLength: 65536
+          description: Fin de la sortie, 64 Kio maximum.
+
+    EventRef:
+      type: object
+      required: [event_id]
+      properties:
+        event_id: { type: integer }
+
+    LoginCode:
+      type: object
+      required: [code, expires_at, login_url]
+      properties:
+        code: { type: string }
+        expires_at: { type: string, format: date-time }
+        login_url:
+          type: string
+          format: uri
+          examples: ["http://localhost:8080/login?code=Zk3..."]
+
+    Health:
+      type: object
+      required: [status, db]
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        db: { type: string, enum: [ok, down] }
+
+    # ---- Événements (SSE) ----
+
+    EventType:
+      type: string
+      enum:
+        - goal.created
+        - goal.status_changed
+        - task.created
+        - task.status_changed
+        - run.started
+        - run.finished
+        - approval.requested
+        - approval.resolved
+        - check.finished
+        - merge.done
+
+    Event:
+      type: object
+      required: [id, goal_id, type, actor, created_at, payload]
+      description: |
+        Enveloppe commune. Le contenu de `payload` dépend de `type` (un schéma `*Payload` par type) ;
+        il suffit à l'affichage, sans autre requête.
+      properties:
+        id: { type: integer }
+        goal_id: { type: [integer, 'null'] }
+        type: { $ref: '#/components/schemas/EventType' }
+        actor:
+          type: string
+          description: Rôle à l'origine de l'événement, ou `system` pour l'API elle-même.
+        created_at: { type: string, format: date-time }
+        payload:
+          oneOf:
+            - $ref: '#/components/schemas/GoalCreatedPayload'
+            - $ref: '#/components/schemas/GoalStatusChangedPayload'
+            - $ref: '#/components/schemas/TaskCreatedPayload'
+            - $ref: '#/components/schemas/TaskStatusChangedPayload'
+            - $ref: '#/components/schemas/RunStartedPayload'
+            - $ref: '#/components/schemas/RunFinishedPayload'
+            - $ref: '#/components/schemas/ApprovalRequestedPayload'
+            - $ref: '#/components/schemas/ApprovalResolvedPayload'
+            - $ref: '#/components/schemas/CheckFinishedPayload'
+            - $ref: '#/components/schemas/MergeDonePayload'
+
+    GoalCreatedPayload:
+      type: object
+      description: "`goal.created`"
+      required: [goal]
+      properties:
+        goal: { $ref: '#/components/schemas/Goal' }
+
+    GoalStatusChangedPayload:
+      type: object
+      description: "`goal.status_changed`"
+      required: [goal_id, title, from, to, reason]
+      properties:
+        goal_id: { type: integer }
+        title: { type: string }
+        from: { $ref: '#/components/schemas/GoalStatus' }
+        to: { $ref: '#/components/schemas/GoalStatus' }
+        reason: { type: [string, 'null'] }
+
+    TaskCreatedPayload:
+      type: object
+      description: "`task.created`"
+      required: [task]
+      properties:
+        task: { $ref: '#/components/schemas/Task' }
+
+    TaskStatusChangedPayload:
+      type: object
+      description: "`task.status_changed`"
+      required: [task_id, role, title, from, to, reason, summary]
+      properties:
+        task_id: { type: integer }
+        role: { $ref: '#/components/schemas/Role' }
+        title: { type: string }
+        from: { $ref: '#/components/schemas/TaskStatus' }
+        to: { $ref: '#/components/schemas/TaskStatus' }
+        reason: { type: [string, 'null'] }
+        summary: { type: [string, 'null'] }
+
+    RunStartedPayload:
+      type: object
+      description: "`run.started`"
+      required: [run, task_title]
+      properties:
+        run: { $ref: '#/components/schemas/Run' }
+        task_title: { type: [string, 'null'], description: "`null` pour un run `plan`." }
+
+    RunFinishedPayload:
+      type: object
+      description: "`run.finished`"
+      required: [run, duration_ms, error, diffstat, files]
+      properties:
+        run: { $ref: '#/components/schemas/Run' }
+        duration_ms: { type: integer }
+        error: { type: [string, 'null'] }
+        diffstat:
+          oneOf:
+            - $ref: '#/components/schemas/Diffstat'
+            - type: 'null'
+        files:
+          type: array
+          items: { type: string }
+
+    ApprovalRequestedPayload:
+      type: object
+      description: "`approval.requested`"
+      required: [approval]
+      properties:
+        approval: { $ref: '#/components/schemas/Approval' }
+
+    ApprovalResolvedPayload:
+      type: object
+      description: "`approval.resolved`"
+      required: [approval_id, kind, decision, comment]
+      properties:
+        approval_id: { type: integer }
+        kind: { $ref: '#/components/schemas/ApprovalKind' }
+        decision: { type: string, enum: [approve, reject] }
+        comment: { type: [string, 'null'] }
+
+    CheckFinishedPayload:
+      type: object
+      description: "`check.finished`"
+      required: [task_id, run_id, name, command, status, duration_ms, output]
+      properties:
+        task_id: { type: [integer, 'null'] }
+        run_id: { type: [integer, 'null'] }
+        name: { type: string }
+        command: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/CheckStatus' }
+        duration_ms: { type: [integer, 'null'] }
+        output: { type: [string, 'null'] }
+
+    MergeDonePayload:
+      type: object
+      description: "`merge.done`"
+      required: [branch, base_branch, commit]
+      properties:
+        branch: { type: string }
+        base_branch: { type: string }
+        commit: { type: string }

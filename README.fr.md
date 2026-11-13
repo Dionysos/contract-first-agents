@@ -175,6 +175,7 @@ Les documents décrivent la **cible complète** (les quatre phases) ; la [feuill
 | [docs/architecture.md](docs/architecture.md) | Architecture logicielle : composants, packages Go, runner, CLI, séquences |
 | [docs/infrastructure.md](docs/infrastructure.md) | Architecture infra : conteneurs, réseaux, isolement des agents, secrets, CI |
 | [docs/api.md](docs/api.md) · [docs/openapi.yaml](docs/openapi.yaml) | Référence de l'API : droits, statuts, garde-fous, événements, SSE |
+| [docs/openapi-phase1.yaml](docs/openapi-phase1.yaml) | API de la phase 1 seule, telle qu'implémentée dans ce dépôt (routes, schémas, catalogue des événements) |
 | [docs/data-contracts.md](docs/data-contracts.md) | Contrats de données et leur correspondance en Go |
 | [docs/database.md](docs/database.md) | Schéma PostgreSQL |
 | [docs/dashboard.md](docs/dashboard.md) | Dashboard |

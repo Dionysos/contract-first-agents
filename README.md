@@ -175,6 +175,7 @@ The documents are written in French. They describe the **full target** (all four
 | [docs/architecture.md](docs/architecture.md) | Software architecture: components, Go packages, runner, CLI, sequences |
 | [docs/infrastructure.md](docs/infrastructure.md) | Infrastructure: containers, networks, agent isolation, secrets, CI |
 | [docs/api.md](docs/api.md) · [docs/openapi.yaml](docs/openapi.yaml) | API reference: permissions, statuses, guardrails, events, SSE |
+| [docs/openapi-phase1.yaml](docs/openapi-phase1.yaml) | Phase 1 API only, as implemented in this repository (routes, schemas, event catalog) |
 | [docs/data-contracts.md](docs/data-contracts.md) | Data contracts and their Go counterparts |
 | [docs/database.md](docs/database.md) | PostgreSQL schema |
 | [docs/dashboard.md](docs/dashboard.md) | Dashboard |
